@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "fake claude invoked" > /tmp/fake-claude-invoked.marker
+echo "feature output" > feature.txt
+git add -A
+git -c user.email="fake@test.local" -c user.name="Fake Claude" commit -m "Add feature.txt" >/dev/null
+
+echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.01}'
