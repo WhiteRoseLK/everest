@@ -4,6 +4,7 @@ import {
   branchNameFor,
   createBranch,
   checkoutBranch,
+  pushBranch,
   openPullRequest,
   commentOnIssue,
   type Issue,
@@ -53,6 +54,7 @@ async function handleIssue(issue: Issue, state: HarnessState | null, config: Con
   }
 
   if (result.success) {
+    await pushBranch(branch, cwd);
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
   } else {

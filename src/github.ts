@@ -56,6 +56,10 @@ export async function currentCommit(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+export async function pushBranch(branch: string, cwd: string): Promise<void> {
+  await execFileAsync('git', ['push', '-u', 'origin', branch], { cwd });
+}
+
 export async function openPullRequest(
   repo: string,
   issue: Issue,

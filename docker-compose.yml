@@ -1,6 +1,9 @@
 services:
   harness:
     build: .
+    volumes:
+      - .:/app
+      - /app/node_modules
     environment:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}

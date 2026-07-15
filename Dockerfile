@@ -20,4 +20,12 @@ RUN npm install
 COPY . .
 RUN npm run typecheck
 
+RUN chown -R node:node /app
+USER node
+
+RUN git config --global user.email "harness@everest.local" \
+    && git config --global user.name "Everest Harness" \
+    && git config --global --add safe.directory /app \
+    && git config --global credential."https://github.com".helper '!gh auth git-credential'
+
 CMD ["npm", "start"]
