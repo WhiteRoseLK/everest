@@ -32,10 +32,15 @@ export async function runClaudeCode(
 ): Promise<ClaudeResult> {
   const commitBefore = await currentCommit(cwd);
 
+  // bypassPermissions is required, not just acceptEdits: acceptEdits only
+  // auto-approves file edits, but Bash (needed for `npm test` and `git
+  // commit`) still gets silently denied in headless mode with no one to
+  // approve it. This is only safe because the harness runs inside the
+  // Docker sandbox (see Dockerfile).
   const proc = spawnSync('claude', [
     '-p', prompt,
     '--output-format', 'json',
-    '--permission-mode', 'acceptEdits',
+    '--permission-mode', 'bypassPermissions',
     '--max-budget-usd', String(maxBudgetUsd),
     '--append-system-prompt', systemPromptAppend,
   ], { cwd, encoding: 'utf-8' });
