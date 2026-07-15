@@ -2,7 +2,7 @@ services:
   harness:
     build: .
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}
       - GITHUB_REPO=${GITHUB_REPO}
       - MAX_BUDGET_USD_PER_ISSUE=${MAX_BUDGET_USD_PER_ISSUE:-2}
