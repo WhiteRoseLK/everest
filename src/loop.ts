@@ -15,12 +15,21 @@ import { buildPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Selects the next issue to process: oldest first (FIFO). */
+const HIGH_PRIORITY_LABEL = 'priority:high';
+
+/**
+ * Selects the next issue to process: issues labeled `priority:high` come first,
+ * regardless of creation date. Within each priority tier, issues are ordered
+ * oldest first (FIFO).
+ */
 export function pickNextIssue(issues: Issue[]): Issue | null {
   if (issues.length === 0) return null;
-  return [...issues].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-  )[0];
+  return [...issues].sort((a, b) => {
+    const aPriority = a.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
+    const bPriority = b.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  })[0];
 }
 
 async function handleIssue(
