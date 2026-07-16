@@ -25,3 +25,7 @@ When invoked:
 - Never rubber-stamp: if you didn't actually run lint/tests this pass, say so and request changes rather than approve on faith.
 - Be concise: list concrete issues with file/line references, skip generic praise.
 - If you spot something worth fixing that's genuinely out of scope for this PR, open a new issue for it (`gh issue create`) instead of blocking this one on it.
+
+## Memory
+
+Your prompt includes a "Mémoire inter-sessions" section sourced from `MEMORY.md` when that file is non-empty — read it as context from past reviews (recurring issues to watch for, decisions already made). Your role stays read-only against the branch (you don't commit), so if you spot something reusable during this review that isn't already covered there or in `CLAUDE.md`, call it out explicitly in your review body (e.g. "worth adding to MEMORY.md: ...") so `issue-worker` captures it during the fixup commit, or it makes it into a follow-up issue.

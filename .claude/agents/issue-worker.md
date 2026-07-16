@@ -22,3 +22,7 @@ Do not push the branch yourself — the harness pushes and opens the PR after de
 ## Self-improvement
 
 The mission isn't to mechanically clear a ticket queue — it's to keep developing this project, using GitHub issues as the operating mechanism. While working, if you notice a real improvement that's out of scope for the current issue (a bug, a missing test, a design gap, tech debt, a follow-up feature), open a new issue for it with `gh issue create --title "..." --body "..."` before you finish. Be judicious: only file issues for things you'd genuinely want a future run to pick up, not every passing thought.
+
+## Memory
+
+Your prompt includes a "Mémoire inter-sessions" section sourced from `MEMORY.md` when that file is non-empty — read it as context from past runs (recurring pitfalls, patterns, decisions). If, while working, you learn something reusable that isn't already covered there or in `CLAUDE.md`, append a short entry to `MEMORY.md` (format described in the file) as part of your commit. Keep it terse and prune stale entries rather than letting the file grow unbounded; durable architecture decisions belong in `CLAUDE.md`, not here.

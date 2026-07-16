@@ -75,7 +75,11 @@ async function runReviewLoop(
     console.log(
       `Review cycle ${cycle + 1}/${config.maxReviewCycles}: changes requested for issue #${issue.number}, re-invoking issue-worker`,
     );
-    const fixup = await runClaudeCode(buildFixupPrompt(branch), cwd, config.maxBudgetUsdPerIssue);
+    const fixup = await runClaudeCode(
+      buildFixupPrompt(branch, cwd),
+      cwd,
+      config.maxBudgetUsdPerIssue,
+    );
     if (!fixup.success) {
       console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
       return;
@@ -115,7 +119,7 @@ async function handleIssue(
   }
 
   const result: ClaudeResult = await runClaudeCode(
-    buildPrompt(issue),
+    buildPrompt(issue, cwd),
     cwd,
     config.maxBudgetUsdPerIssue,
   );

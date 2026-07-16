@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { currentCommit, setGitIdentity } from './github.js';
+import { memorySection } from './prompt.js';
 
 export interface ClaudeResult {
   success: boolean;
@@ -177,6 +178,6 @@ export async function runCodeReview(
   cwd: string,
   maxBudgetUsd: number,
 ): Promise<ClaudeResult> {
-  const prompt = `Review the open pull request for branch "${branch}" and post your findings as a PR review comment.`;
+  const prompt = `Review the open pull request for branch "${branch}" and post your findings as a PR review comment.${memorySection(cwd)}`;
   return runAgent('code-reviewer', prompt, cwd, maxBudgetUsd);
 }

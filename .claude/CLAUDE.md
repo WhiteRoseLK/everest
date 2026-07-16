@@ -61,6 +61,12 @@ Note : la branch protection classique et les rulesets GitHub ne sont pas disponi
 - Un hook `PreToolUse` bloque toute commande Bash contenant un pattern de secret probable (clé API, token, mot de passe).
 - Ne jamais committer `.env` ou toute valeur de `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN`.
 
+## Memory
+
+Chaque invocation d'`issue-worker`/`code-reviewer` est une session fraîche : pas de mémoire des runs précédents au-delà de ce qui est commité dans le repo (voir Architecture Overview). Évalué dans l'issue #12 : intégrer mem0 (service externe de mémoire vectorielle) vs. mémoire fichier native. Décision : mémoire fichier native, pas de mem0 — aucun besoin concret non couvert par un simple fichier versionné n'a été identifié, et mem0 aurait ajouté une dépendance/service externe (clé API, coût, point de défaillance supplémentaire) pour un problème que git résout déjà.
+
+Concrètement : `MEMORY.md` à la racine du repo consigne les leçons/patterns/décisions récurrents repérés par les agents. Il est injecté automatiquement dans le prompt de chaque invocation d'agent (`memorySection()` dans `src/prompt.ts`, utilisé par `buildPrompt`/`buildFixupPrompt` et par `runCodeReview` dans `src/claude.ts`), tronqué au-delà de `MAX_MEMORY_CHARS` pour éviter qu'un fichier mal élagué ne gonfle indéfiniment le prompt. `issue-worker` peut y ajouter une entrée directement ; `code-reviewer`, qui ne commite pas sur la branche, le signale dans son commentaire de review pour qu'`issue-worker` l'ajoute au prochain cycle. Les décisions d'architecture durables migrent vers ce fichier (`CLAUDE.md`) plutôt que de rester dans `MEMORY.md`.
+
 ## Known Pitfalls
 
 - `--permission-mode acceptEdits` ne suffit pas en headless : les appels Bash (donc `npm test`, `git commit`) sont refusés silencieusement sans personne pour approuver. Il faut `bypassPermissions`, ce qui n'est sûr que confiné dans le conteneur Docker du harnais.
