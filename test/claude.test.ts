@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isRateLimitError } from '../src/claude.js';
+import { isRateLimitError, shouldCheckRateLimit } from '../src/claude.js';
 
 describe('isRateLimitError', () => {
   it('returns false for a successful run', () => {
@@ -65,5 +65,31 @@ describe('isRateLimitError', () => {
 
   it('still detects a rate limit reported only via stderr when JSON is undefined', () => {
     expect(isRateLimitError(undefined, 'Error: rate_limit_exceeded')).toBe(true);
+  });
+});
+
+describe('shouldCheckRateLimit', () => {
+  it('returns false for a successful run, even if its summary mentions rate limits', () => {
+    // Regression case: reviewing this repo's own rate-limit-detection code produced a
+    // successful summary mentioning "rate limit" and "429", which used to be misclassified
+    // as an actual rate limit because the check ran unconditionally.
+    const parsed = {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Reviewed the rate limit (429) detection changes, no blocking issues found.',
+    };
+
+    expect(shouldCheckRateLimit(parsed)).toBe(false);
+  });
+
+  it('returns true when the run errored', () => {
+    const parsed = { type: 'result', subtype: 'error', is_error: true };
+
+    expect(shouldCheckRateLimit(parsed)).toBe(true);
+  });
+
+  it('returns true when parsed JSON is undefined', () => {
+    expect(shouldCheckRateLimit(undefined)).toBe(true);
   });
 });

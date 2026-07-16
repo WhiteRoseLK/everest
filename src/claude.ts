@@ -61,6 +61,17 @@ export function isRateLimitError(parsed: ClaudeJsonOutput | undefined, stderr: s
 }
 
 /**
+ * Gates whether `isRateLimitError` should even be consulted. It scans `result` (the agent's
+ * free-text summary) alongside `subtype`/`errors`/`stderr`, so calling it on a *successful* run
+ * risks a false positive if the summary happens to mention rate limits or "429" - exactly what
+ * happened when code-reviewer analyzed this repo's own rate-limit-detection code and its own
+ * summary triggered the heuristic. Only a run that already errored should be checked.
+ */
+export function shouldCheckRateLimit(parsed: ClaudeJsonOutput | undefined): boolean {
+  return !parsed || parsed.is_error;
+}
+
+/**
  * Runs a named subagent (defined in `.claude/agents/`) headlessly, after setting the git
  * identity matching that agent. Returns whether it completed without error or hit a rate limit;
  * callers add their own success criteria on top (e.g. "did it produce a commit").
@@ -108,11 +119,11 @@ async function runAgent(
     parsed = undefined;
   }
 
-  if (isRateLimitError(parsed, proc.stderr ?? '')) {
-    return { success: false, rateLimited: true };
-  }
+  if (shouldCheckRateLimit(parsed)) {
+    if (isRateLimitError(parsed, proc.stderr ?? '')) {
+      return { success: false, rateLimited: true };
+    }
 
-  if (!parsed || parsed.is_error) {
     // The rate-limit heuristic in isRateLimitError() is undocumented and can miss real
     // rate-limit responses in a format it doesn't recognize yet. Logging the raw output here
     // makes it possible to spot those misses after the fact and extend RATE_LIMIT_PATTERNS.
