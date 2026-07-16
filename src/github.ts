@@ -128,6 +128,23 @@ export async function openPullRequest(
   return stdout.trim();
 }
 
+export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+
+/** Reads the PR's current review decision, used to drive the issue-worker/code-reviewer loop. */
+export async function getReviewDecision(repo: string, branch: string): Promise<ReviewDecision> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'view',
+    branch,
+    '--repo',
+    repo,
+    '--json',
+    'reviewDecision',
+  ]);
+  const { reviewDecision } = JSON.parse(stdout) as { reviewDecision: string | null };
+  return (reviewDecision as ReviewDecision) || null;
+}
+
 /** Posts a comment on the issue, used to report processing failures back to GitHub. */
 export async function commentOnIssue(repo: string, issue: Issue, body: string): Promise<void> {
   await execFileAsync('gh', [

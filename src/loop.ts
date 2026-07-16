@@ -8,11 +8,12 @@ import {
   openPullRequest,
   commentOnIssue,
   hasOpenPullRequest,
+  getReviewDecision,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
-import { buildPrompt } from './prompt.js';
+import { buildPrompt, buildFixupPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -43,6 +44,48 @@ async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise
     issues.map((issue) => hasOpenPullRequest(repo, branchNameFor(issue))),
   );
   return issues.filter((_, index) => !flags[index]);
+}
+
+/**
+ * Runs code-reviewer against the branch and, if it requests changes, re-invokes issue-worker
+ * with the review feedback and re-reviews - repeating until approved or `maxReviewCycles` is
+ * reached (a launch budget, so a stuck disagreement can't loop forever).
+ */
+async function runReviewLoop(
+  issue: Issue,
+  branch: string,
+  config: Config,
+  cwd: string,
+): Promise<void> {
+  for (let cycle = 0; cycle < config.maxReviewCycles; cycle += 1) {
+    const review = await runCodeReview(branch, cwd, config.maxBudgetUsdPerReview);
+    if (!review.success) {
+      console.log(`Code review failed for issue #${issue.number}: ${review.errorSummary}`);
+      return;
+    }
+
+    const decision = await getReviewDecision(config.githubRepo, branch);
+    if (decision !== 'CHANGES_REQUESTED') {
+      console.log(`PR for issue #${issue.number} review decision: ${decision ?? 'none'}`);
+      return;
+    }
+
+    console.log(
+      `Review cycle ${cycle + 1}/${config.maxReviewCycles}: changes requested for issue #${issue.number}, re-invoking issue-worker`,
+    );
+    const fixup = await runClaudeCode(buildFixupPrompt(branch), cwd, config.maxBudgetUsdPerIssue);
+    if (!fixup.success) {
+      console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
+      return;
+    }
+    await pushBranch(branch, cwd);
+  }
+
+  await commentOnIssue(
+    config.githubRepo,
+    issue,
+    `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
+  );
 }
 
 async function handleIssue(
@@ -91,10 +134,7 @@ async function handleIssue(
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
 
-    const review = await runCodeReview(branch, cwd, config.maxBudgetUsdPerReview);
-    if (!review.success) {
-      console.log(`Code review failed for issue #${issue.number}: ${review.errorSummary}`);
-    }
+    await runReviewLoop(issue, branch, config, cwd);
   } else {
     await commentOnIssue(
       config.githubRepo,
