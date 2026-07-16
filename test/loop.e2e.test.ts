@@ -52,6 +52,8 @@ describe('runLoop end-to-end', () => {
 
   afterEach(() => {
     process.env.PATH = originalPath;
+    delete process.env.FAKE_GH_PR_LIST;
+    delete process.env.FAKE_GH_PR_VIEW;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -74,5 +76,61 @@ describe('runLoop end-to-end', () => {
 
     const branches = execFileSync('git', ['branch', '-a'], { cwd: originDir, encoding: 'utf-8' });
     expect(branches).toContain('harness/issue-1-test-issue');
+  });
+
+  it('resumes the review loop for an already-open PR left with CHANGES_REQUESTED', async () => {
+    const reviewerMarker = '/tmp/fake-code-reviewer-invoked.marker';
+    rmSync(reviewerMarker, { force: true });
+
+    // Simulate a previous run that already opened the PR for issue #1: the branch exists,
+    // has a commit, and is pushed - but the harness stopped before the review loop resolved.
+    git(['checkout', '-b', 'harness/issue-1-test-issue'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'existing PR commit',
+      ],
+      workDir,
+    );
+    git(['push', '-u', 'origin', 'harness/issue-1-test-issue'], workDir);
+    git(['checkout', 'main'], workDir);
+
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      {
+        headRefName: 'harness/issue-1-test-issue',
+        reviewDecision: 'CHANGES_REQUESTED',
+        labels: [],
+      },
+    ]);
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ reviewDecision: 'APPROVED' });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 100,
+      baseRetryDelayMs: 100,
+      maxRetryDelayMs: 1000,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The resumed review loop invoked code-reviewer, saw it's now approved, and did not
+    // recreate the PR (openPullRequest is only called from the fresh-issue path).
+    expect(existsSync(reviewerMarker)).toBe(true);
+    expect(existsSync(prMarker)).toBe(false);
+
+    const currentBranch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    }).trim();
+    expect(currentBranch).toBe('harness/issue-1-test-issue');
   });
 });

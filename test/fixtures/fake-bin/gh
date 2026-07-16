@@ -7,7 +7,7 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
 fi
 
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-  echo '[]'
+  echo "${FAKE_GH_PR_LIST:-[]}"
   exit 0
 fi
 
@@ -18,12 +18,27 @@ if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
 fi
 
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  echo '{"reviewDecision":"APPROVED"}'
+  if [ -n "${FAKE_GH_PR_VIEW:-}" ]; then
+    echo "$FAKE_GH_PR_VIEW"
+  else
+    echo '{"reviewDecision":"APPROVED"}'
+  fi
+  exit 0
+fi
+
+if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  if [ -n "${FAKE_GH_PR_EDIT_MARKER:-}" ]; then
+    echo "$@" >> "$FAKE_GH_PR_EDIT_MARKER"
+  fi
+  exit 0
+fi
+
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then
   exit 0
 fi
 
 if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
-  echo "$@" > "$FAKE_GH_COMMENT_MARKER"
+  echo "$@" >> "$FAKE_GH_COMMENT_MARKER"
   exit 0
 fi
 
