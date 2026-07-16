@@ -11,7 +11,7 @@ import {
 } from './github.js';
 import { runClaudeCode, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
-import { buildPrompt, QA_E2E_SYSTEM_PROMPT } from './prompt.js';
+import { buildPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -39,7 +39,6 @@ async function handleIssue(issue: Issue, state: HarnessState | null, config: Con
 
   const result: ClaudeResult = await runClaudeCode(
     buildPrompt(issue),
-    QA_E2E_SYSTEM_PROMPT,
     cwd,
     config.maxBudgetUsdPerIssue,
   );

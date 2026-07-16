@@ -26,23 +26,22 @@ export function isRateLimitError(parsed: ClaudeJsonOutput | undefined, stderr: s
 
 export async function runClaudeCode(
   prompt: string,
-  systemPromptAppend: string,
   cwd: string,
   maxBudgetUsd: number,
 ): Promise<ClaudeResult> {
   const commitBefore = await currentCommit(cwd);
 
-  // bypassPermissions is required, not just acceptEdits: acceptEdits only
-  // auto-approves file edits, but Bash (needed for `npm test` and `git
-  // commit`) still gets silently denied in headless mode with no one to
-  // approve it. This is only safe because the harness runs inside the
-  // Docker sandbox (see Dockerfile).
+  // permissionMode and maxTurns live in .claude/agents/issue-worker.md
+  // (versioned, reviewable) rather than as CLI flags here. bypassPermissions
+  // is required there, not just acceptEdits: acceptEdits only auto-approves
+  // file edits, but Bash (needed for `npm test` and `git commit`) still gets
+  // silently denied in headless mode with no one to approve it. This is only
+  // safe because the harness runs inside the Docker sandbox (see Dockerfile).
   const proc = spawnSync('claude', [
     '-p', prompt,
+    '--agent', 'issue-worker',
     '--output-format', 'json',
-    '--permission-mode', 'bypassPermissions',
     '--max-budget-usd', String(maxBudgetUsd),
-    '--append-system-prompt', systemPromptAppend,
   ], { cwd, encoding: 'utf-8' });
 
   let parsed: ClaudeJsonOutput | undefined;
