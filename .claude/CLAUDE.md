@@ -22,6 +22,8 @@ Le merge lui-même reste toujours un geste humain, y compris après approbation 
 
 Note : la branch protection classique et les rulesets GitHub ne sont pas disponibles sur un repo privé avec un compte gratuit (403 "Upgrade to GitHub Pro or make this repository public"). Le repo `everest` a été rendu **public** (décision explicite) pour débloquer cette fonctionnalité.
 
+**Conséquence directe (`enforce_admins: true`) : plus aucun push direct sur `main`, y compris pour l'opérateur humain.** Tout changement — agent ou humain — passe par une branche + PR + CI verte + merge. Un `git push origin main` direct sera rejeté par GitHub (`protected branch hook declined`).
+
 ## Agent Identities
 
 - Chaque subagent a sa propre identité git (`user.name`/`user.email`, configurée localement au repo avant chaque invocation, voir `AGENT_IDENTITIES` dans `src/claude.ts`) : `everest-issue-worker` pour le code, `everest-code-reviewer` pour la review — ça permet de savoir qui (quel agent) a committé quoi.
