@@ -25,4 +25,9 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 ## Entrées
 
-_Aucune entrée pour l'instant._
+- 2026-07-16 (issue #14) : `pickNextIssue` (src/loop.ts) supporte désormais 4 tiers
+  `priority:critical/high/medium/low` (le plus urgent en premier, FIFO au sein d'un tier). Une
+  issue sans label de priorité est traitée comme `priority:medium` (compat avec le comportement
+  précédent). Les labels `type:bug/type:feature/type:tech-debt` sont volontairement ignorés par
+  le tri — purement informatifs, pas de scoring RICE/WSJF pour l'instant (sur-ingénierie évitée
+  explicitement dans l'issue).

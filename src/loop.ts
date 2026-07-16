@@ -19,18 +19,33 @@ import { buildPrompt, buildFixupPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const HIGH_PRIORITY_LABEL = 'priority:high';
+/**
+ * Priority tiers, ranked from most to least urgent. An issue's rank is the lowest (most urgent)
+ * index among the priority labels it carries. Issues without any of these labels fall back to
+ * the `priority:medium` rank, matching the old behavior where unlabeled issues sat below
+ * `priority:high` in FIFO order.
+ */
+const PRIORITY_TIERS = ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'];
+
+const DEFAULT_PRIORITY_RANK = PRIORITY_TIERS.indexOf('priority:medium');
+
+/** Returns the priority rank of an issue (lower is more urgent); see {@link PRIORITY_TIERS}. */
+function priorityRank(issue: Issue): number {
+  const ranks = issue.labels
+    .map((label) => PRIORITY_TIERS.indexOf(label))
+    .filter((rank) => rank !== -1);
+  return ranks.length > 0 ? Math.min(...ranks) : DEFAULT_PRIORITY_RANK;
+}
 
 /**
- * Selects the next issue to process: issues labeled `priority:high` come first,
- * regardless of creation date. Within each priority tier, issues are ordered
- * oldest first (FIFO).
+ * Selects the next issue to process: issues are ordered by priority tier (see
+ * {@link PRIORITY_TIERS}, most urgent first), then oldest first (FIFO) within each tier.
  */
 export function pickNextIssue(issues: Issue[]): Issue | null {
   if (issues.length === 0) return null;
   return [...issues].sort((a, b) => {
-    const aPriority = a.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
-    const bPriority = b.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
+    const aPriority = priorityRank(a);
+    const bPriority = priorityRank(b);
     if (aPriority !== bPriority) return aPriority - bPriority;
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   })[0];
