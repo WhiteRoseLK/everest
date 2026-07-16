@@ -2,6 +2,7 @@ import type { Config } from './config.js';
 import {
   listOpenIssues,
   branchNameFor,
+  checkoutMain,
   createBranch,
   checkoutBranch,
   pushBranch,
@@ -9,6 +10,7 @@ import {
   commentOnIssue,
   hasOpenPullRequest,
   getReviewDecision,
+  getPullRequestState,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -47,9 +49,11 @@ async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise
 }
 
 /**
- * Runs code-reviewer against the branch and, if it requests changes, re-invokes issue-worker
- * with the review feedback and re-reviews - repeating until approved or `maxReviewCycles` is
- * reached (a launch budget, so a stuck disagreement can't loop forever).
+ * Runs code-reviewer against the branch. code-reviewer merges directly once it decides a PR is
+ * ready (see .claude/agents/code-reviewer.md - it can't formally --approve its own PR, so it
+ * merges instead of relying on a review decision). If it requests changes instead, this
+ * re-invokes issue-worker with the feedback and re-reviews - repeating until merged or
+ * `maxReviewCycles` is reached (a launch budget, so a stuck disagreement can't loop forever).
  */
 async function runReviewLoop(
   issue: Issue,
@@ -64,9 +68,17 @@ async function runReviewLoop(
       return;
     }
 
+    const prState = await getPullRequestState(config.githubRepo, branch);
+    if (prState === 'MERGED') {
+      console.log(`PR for issue #${issue.number} merged by code-reviewer`);
+      return;
+    }
+
     const decision = await getReviewDecision(config.githubRepo, branch);
     if (decision !== 'CHANGES_REQUESTED') {
-      console.log(`PR for issue #${issue.number} review decision: ${decision ?? 'none'}`);
+      console.log(
+        `PR for issue #${issue.number} not merged yet (state: ${prState}, decision: ${decision ?? 'none'})`,
+      );
       return;
     }
 
@@ -104,6 +116,7 @@ async function handleIssue(
   } else {
     branch = branchNameFor(issue);
     retryCount = 0;
+    await checkoutMain(cwd);
     await createBranch(branch, cwd);
     saveState(
       { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },

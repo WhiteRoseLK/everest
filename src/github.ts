@@ -81,6 +81,16 @@ export async function hasOpenPullRequest(repo: string, branch: string): Promise<
   return prs.length > 0;
 }
 
+/**
+ * Checks out `main` and fast-forwards it to `origin/main`. Called before creating a new issue
+ * branch so it always branches from up-to-date main, not from whatever branch a previous issue
+ * left checked out (which may since have been merged and deleted on the remote).
+ */
+export async function checkoutMain(cwd: string): Promise<void> {
+  await execFileAsync('git', ['checkout', 'main'], { cwd });
+  await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd });
+}
+
 /** Creates and checks out a new branch for an issue being processed for the first time. */
 export async function createBranch(branch: string, cwd: string): Promise<void> {
   await execFileAsync('git', ['checkout', '-b', branch], { cwd });
@@ -143,6 +153,27 @@ export async function getReviewDecision(repo: string, branch: string): Promise<R
   ]);
   const { reviewDecision } = JSON.parse(stdout) as { reviewDecision: string | null };
   return (reviewDecision as ReviewDecision) || null;
+}
+
+export type PullRequestState = 'OPEN' | 'MERGED' | 'CLOSED';
+
+/**
+ * Reads the PR's current state (open/merged/closed). code-reviewer merges directly once it
+ * decides a PR is ready (see .claude/agents/code-reviewer.md), so the harness checks this -
+ * rather than review decisions alone - to know whether a PR is actually done.
+ */
+export async function getPullRequestState(repo: string, branch: string): Promise<PullRequestState> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'view',
+    branch,
+    '--repo',
+    repo,
+    '--json',
+    'state',
+  ]);
+  const { state } = JSON.parse(stdout) as { state: PullRequestState };
+  return state;
 }
 
 /** Posts a comment on the issue, used to report processing failures back to GitHub. */
