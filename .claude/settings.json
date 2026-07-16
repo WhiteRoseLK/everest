@@ -5,7 +5,7 @@
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": ".claude/hooks/block-secrets.sh" },
-          { "type": "command", "command": ".claude/hooks/enforce-tests-before-commit.sh" }
+          { "type": "command", "command": ".claude/hooks/enforce-quality-before-commit.sh" }
         ]
       }
     ]

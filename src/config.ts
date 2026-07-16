@@ -19,6 +19,7 @@ function numberEnv(name: string, fallback: number): number {
   return value ? Number(value) : fallback;
 }
 
+/** Loads and validates harness configuration from environment variables (see .env.example). */
 export function loadConfig(): Config {
   return {
     githubRepo: required('GITHUB_REPO'),

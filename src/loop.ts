@@ -15,6 +15,7 @@ import { buildPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Selects the next issue to process: oldest first (FIFO). */
 export function pickNextIssue(issues: Issue[]): Issue | null {
   if (issues.length === 0) return null;
   return [...issues].sort(
@@ -22,7 +23,12 @@ export function pickNextIssue(issues: Issue[]): Issue | null {
   )[0];
 }
 
-async function handleIssue(issue: Issue, state: HarnessState | null, config: Config, cwd: string): Promise<void> {
+async function handleIssue(
+  issue: Issue,
+  state: HarnessState | null,
+  config: Config,
+  cwd: string,
+): Promise<void> {
   let branch: string;
   let retryCount: number;
 
@@ -34,7 +40,10 @@ async function handleIssue(issue: Issue, state: HarnessState | null, config: Con
     branch = branchNameFor(issue);
     retryCount = 0;
     await createBranch(branch, cwd);
-    saveState({ issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount }, cwd);
+    saveState(
+      { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
+      cwd,
+    );
   }
 
   const result: ClaudeResult = await runClaudeCode(
@@ -46,7 +55,10 @@ async function handleIssue(issue: Issue, state: HarnessState | null, config: Con
   if (result.rateLimited) {
     retryCount += 1;
     const delay = Math.min(config.baseRetryDelayMs * 2 ** retryCount, config.maxRetryDelayMs);
-    saveState({ issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount }, cwd);
+    saveState(
+      { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
+      cwd,
+    );
     console.log(`Rate limited on issue #${issue.number}, retrying in ${delay}ms`);
     await sleep(delay);
     return;
@@ -57,13 +69,18 @@ async function handleIssue(issue: Issue, state: HarnessState | null, config: Con
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
   } else {
-    await commentOnIssue(config.githubRepo, issue, `Le harnais n'a pas pu traiter cette issue automatiquement : ${result.errorSummary}`);
+    await commentOnIssue(
+      config.githubRepo,
+      issue,
+      `Le harnais n'a pas pu traiter cette issue automatiquement : ${result.errorSummary}`,
+    );
     console.log(`Failed to process issue #${issue.number}: ${result.errorSummary}`);
   }
 
   clearState(cwd);
 }
 
+/** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(config: Config, cwd: string, iterations = Infinity): Promise<void> {
   for (let i = 0; i < iterations; i += 1) {
     const state = loadState(cwd);

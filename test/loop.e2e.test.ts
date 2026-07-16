@@ -27,7 +27,19 @@ describe('runLoop end-to-end', () => {
 
     git(['init', '--bare', originDir], tmpRoot);
     git(['init', workDir], tmpRoot);
-    git(['-c', 'user.email=test@test.local', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'initial'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'initial',
+      ],
+      workDir,
+    );
     git(['branch', '-m', 'main'], workDir);
     git(['remote', 'add', 'origin', originDir], workDir);
     git(['push', '-u', 'origin', 'main'], workDir);
