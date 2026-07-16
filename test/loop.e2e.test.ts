@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runLoop } from '../src/loop.js';
+import { loadCostLog } from '../src/cost.js';
 import type { Config } from '../src/config.js';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
@@ -78,6 +79,14 @@ describe('runLoop end-to-end', () => {
 
     const branches = execFileSync('git', ['branch', '-a'], { cwd: originDir, encoding: 'utf-8' });
     expect(branches).toContain('harness/issue-1-test-issue');
+
+    // The fake claude binary reports total_cost_usd: 0.01 - the harness should record it,
+    // tagged with the issue, so token cost can be measured before ever considering a
+    // context-compression tool like Headroom (see issue #13).
+    const costLog = loadCostLog(workDir);
+    expect(costLog).toContainEqual(
+      expect.objectContaining({ agent: 'issue-worker', label: 'issue-#1', totalCostUsd: 0.01 }),
+    );
   });
 
   it('resumes the review loop for an already-open PR left with CHANGES_REQUESTED', async () => {

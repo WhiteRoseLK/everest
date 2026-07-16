@@ -79,6 +79,7 @@ async function runReviewLoop(
       buildFixupPrompt(branch, cwd),
       cwd,
       config.maxBudgetUsdPerIssue,
+      `issue-#${issue.number}-fixup`,
     );
     if (!fixup.success) {
       console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
@@ -122,6 +123,7 @@ async function handleIssue(
     buildPrompt(issue, cwd),
     cwd,
     config.maxBudgetUsdPerIssue,
+    `issue-#${issue.number}`,
   );
 
   if (result.rateLimited) {
