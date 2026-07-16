@@ -10,7 +10,7 @@ import {
   hasOpenPullRequest,
   type Issue,
 } from './github.js';
-import { runClaudeCode, type ClaudeResult } from './claude.js';
+import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
 import { buildPrompt } from './prompt.js';
 
@@ -90,6 +90,11 @@ async function handleIssue(
     await pushBranch(branch, cwd);
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
+
+    const review = await runCodeReview(branch, cwd, config.maxBudgetUsdPerReview);
+    if (!review.success) {
+      console.log(`Code review failed for issue #${issue.number}: ${review.errorSummary}`);
+    }
   } else {
     await commentOnIssue(
       config.githubRepo,

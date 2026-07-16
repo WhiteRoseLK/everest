@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { currentCommit } from './github.js';
+import { currentCommit, setGitIdentity } from './github.js';
 
 export interface ClaudeResult {
   success: boolean;
@@ -15,6 +15,20 @@ interface ClaudeJsonOutput {
   errors?: string[];
   total_cost_usd?: number;
 }
+
+interface AgentIdentity {
+  name: string;
+  email: string;
+}
+
+/**
+ * Git author identity per subagent role, so commits and (where supported) API actions are
+ * attributed to the agent that made them instead of a single shared "harness" identity.
+ */
+const AGENT_IDENTITIES: Record<string, AgentIdentity> = {
+  'issue-worker': { name: 'everest-issue-worker', email: 'issue-worker@everest.local' },
+  'code-reviewer': { name: 'everest-code-reviewer', email: 'code-reviewer@everest.local' },
+};
 
 /**
  * Detects whether a `claude -p` invocation was cut short by hitting a usage/rate limit.
@@ -34,17 +48,20 @@ export function isRateLimitError(parsed: ClaudeJsonOutput | undefined, stderr: s
 }
 
 /**
- * Runs the `issue-worker` subagent headlessly against one issue prompt and reports
- * whether it produced a new commit, hit a rate limit, or failed outright.
+ * Runs a named subagent (defined in `.claude/agents/`) headlessly, after setting the git
+ * identity matching that agent. Returns whether it completed without error or hit a rate limit;
+ * callers add their own success criteria on top (e.g. "did it produce a commit").
  */
-export async function runClaudeCode(
+async function runAgent(
+  agentName: string,
   prompt: string,
   cwd: string,
   maxBudgetUsd: number,
 ): Promise<ClaudeResult> {
-  const commitBefore = await currentCommit(cwd);
+  const identity = AGENT_IDENTITIES[agentName];
+  await setGitIdentity(identity.name, identity.email, cwd);
 
-  // maxTurns lives in .claude/agents/issue-worker.md, but permissionMode
+  // maxTurns lives in .claude/agents/<agentName>.md, but permissionMode
   // there is NOT honored when the agent is the top-level session (only when
   // it's spawned as a subagent from within another session) - confirmed by
   // a debug run where every write/Bash call was denied despite the agent
@@ -60,7 +77,7 @@ export async function runClaudeCode(
       '-p',
       prompt,
       '--agent',
-      'issue-worker',
+      agentName,
       '--permission-mode',
       'bypassPermissions',
       '--output-format',
@@ -90,6 +107,23 @@ export async function runClaudeCode(
     };
   }
 
+  return { success: true, rateLimited: false };
+}
+
+/**
+ * Runs the `issue-worker` subagent against one issue prompt and reports whether it produced a
+ * new commit, hit a rate limit, or failed outright.
+ */
+export async function runClaudeCode(
+  prompt: string,
+  cwd: string,
+  maxBudgetUsd: number,
+): Promise<ClaudeResult> {
+  const commitBefore = await currentCommit(cwd);
+
+  const result = await runAgent('issue-worker', prompt, cwd, maxBudgetUsd);
+  if (!result.success) return result;
+
   const commitAfter = await currentCommit(cwd);
   const hasNewCommit = commitAfter !== commitBefore;
 
@@ -98,4 +132,18 @@ export async function runClaudeCode(
     rateLimited: false,
     errorSummary: hasNewCommit ? undefined : 'no new commit produced',
   };
+}
+
+/**
+ * Runs the `code-reviewer` subagent against a PR branch. The agent posts its findings as a PR
+ * review comment itself (see .claude/agents/code-reviewer.md) - this just reports whether the
+ * review ran successfully, it never approves or merges on the harness's behalf.
+ */
+export async function runCodeReview(
+  branch: string,
+  cwd: string,
+  maxBudgetUsd: number,
+): Promise<ClaudeResult> {
+  const prompt = `Review the open pull request for branch "${branch}" and post your findings as a PR review comment.`;
+  return runAgent('code-reviewer', prompt, cwd, maxBudgetUsd);
 }

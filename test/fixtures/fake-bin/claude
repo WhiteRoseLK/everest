@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AGENT=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--agent" ]; then
+    AGENT="$2"
+  fi
+  shift
+done
+
+if [ "$AGENT" = "code-reviewer" ]; then
+  echo "fake code-reviewer invoked" > /tmp/fake-code-reviewer-invoked.marker
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"No blocking issues found.","total_cost_usd":0.01}'
+  exit 0
+fi
+
 echo "fake claude invoked" > /tmp/fake-claude-invoked.marker
 echo "feature output" > feature.txt
 git add -A
-git -c user.email="fake@test.local" -c user.name="Fake Claude" commit -m "Add feature.txt" >/dev/null
+git commit -m "Add feature.txt" >/dev/null
 
 echo '{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.01}'

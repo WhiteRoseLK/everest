@@ -6,7 +6,13 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 ## Architecture Overview
 
-`src/loop.ts` lit les issues ouvertes (FIFO), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
+`src/loop.ts` lit les issues ouvertes (FIFO, `priority:high` en premier), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Une fois la PR ouverte, `claude -p --agent code-reviewer` est invoqué sur la même branche pour laisser une review (jamais d'approve/merge automatique). Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
+
+## Agent Identities
+
+- Chaque subagent a sa propre identité git (`user.name`/`user.email`, configurée localement au repo avant chaque invocation, voir `AGENT_IDENTITIES` dans `src/claude.ts`) : `everest-issue-worker` pour le code, `everest-code-reviewer` pour la review — ça permet de savoir qui (quel agent) a committé quoi.
+- Limite connue : l'auteur de la PR elle-même (`gh pr create`) et les reviews (`gh pr review`) restent attribués au compte GitHub propriétaire de `GH_TOKEN`, pas à une identité d'agent — GitHub n'offre aucun moyen de contourner ça sans un compte/token séparé par agent. Pas mis en place pour l'instant (décision explicite : rester sur un seul compte).
+- Le squash-merge réattribue toujours le commit final à qui merge, même si les commits d'origine sur la branche ont la bonne identité — accepté comme limitation connue (décision explicite de garder squash).
 
 ## Development Workflow
 

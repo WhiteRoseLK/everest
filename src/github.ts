@@ -44,6 +44,16 @@ export async function listOpenIssues(repo: string): Promise<Issue[]> {
   }));
 }
 
+/**
+ * Sets the git author identity (repo-local, not global) used for the next commit. Called before
+ * invoking each subagent so commits are attributed to the agent that made them (e.g.
+ * `everest-issue-worker`) instead of a single shared identity.
+ */
+export async function setGitIdentity(name: string, email: string, cwd: string): Promise<void> {
+  await execFileAsync('git', ['config', 'user.name', name], { cwd });
+  await execFileAsync('git', ['config', 'user.email', email], { cwd });
+}
+
 /** Derives the deterministic branch name the harness uses for a given issue. */
 export function branchNameFor(issue: Issue): string {
   return `harness/issue-${issue.number}-${slugify(issue.title)}`;

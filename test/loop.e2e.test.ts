@@ -59,6 +59,7 @@ describe('runLoop end-to-end', () => {
     const config: Config = {
       githubRepo: 'fake/repo',
       maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
