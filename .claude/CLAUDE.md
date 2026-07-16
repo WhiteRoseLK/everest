@@ -6,7 +6,19 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 ## Architecture Overview
 
-`src/loop.ts` lit les issues ouvertes (FIFO, `priority:high` en premier), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Une fois la PR ouverte, `claude -p --agent code-reviewer` est invoqué sur la même branche pour laisser une review (jamais d'approve/merge automatique). Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
+`src/loop.ts` lit les issues ouvertes (FIFO, `priority:high` en premier), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
+
+## Review Loop
+
+Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, puis statue réellement avec `gh pr review --approve` ou `--request-changes`. C'est un vrai gate, pas juste un commentaire consultatif.
+
+Si `--request-changes` : le harnais rappelle `issue-worker` sur la même branche avec le retour du reviewer en contexte (`buildFixupPrompt`), repousse le commit, puis relance `code-reviewer`. Ce cycle se répète jusqu'à approbation ou jusqu'à `MAX_REVIEW_CYCLES` (défaut 3, `runReviewLoop` dans `src/loop.ts`) — budget de lancement pour éviter une boucle infinie si l'agent et le reviewer n'arrivent jamais à s'accorder. Au-delà, un commentaire est posté sur l'issue pour signaler qu'une intervention humaine est nécessaire.
+
+Le merge lui-même reste toujours un geste humain, y compris après approbation du reviewer — voir Code Review ci-dessous.
+
+## CI
+
+`.github/workflows/ci.yml` relance lint + test sur chaque PR, indépendamment des agents. Un check obligatoire (branch protection sur `main`) empêche le merge si CI échoue, même en cliquant le bouton sur GitHub — le gate le plus robuste des trois (hook local Husky contournable avec `--no-verify`, review d'agent contournable en théorie, CI+branch protection non contournable par un contributeur standard).
 
 ## Agent Identities
 
@@ -24,8 +36,8 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 ## Code Review
 
-- Le harnais n'a pas le droit de merger ses propres PR : `openPullRequest()` ouvre la PR et s'arrête là, le merge reste un geste humain.
-- Toute PR doit être relue avant merge, même ouverte automatiquement par le harnais.
+- Le harnais n'a pas le droit de merger ses propres PR, même une fois approuvée par `code-reviewer` : `openPullRequest()` ouvre la PR, `runReviewLoop()` fait itérer issue-worker/code-reviewer jusqu'à approbation, mais cliquer sur merge reste un geste humain.
+- `code-reviewer` est le gardien de `main` : il doit vérifier activement (lancer les tests lui-même), pas se contenter de lire le diff, et n'a pas peur de bloquer (`--request-changes`) tant que ce n'est pas prêt.
 - Ne jamais ajouter de merge automatique/auto-merge à `src/github.ts` sans que ce soit explicitement demandé.
 
 ## Code Style

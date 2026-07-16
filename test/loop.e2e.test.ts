@@ -60,6 +60,7 @@ describe('runLoop end-to-end', () => {
       githubRepo: 'fake/repo',
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
