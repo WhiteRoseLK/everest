@@ -54,6 +54,7 @@ describe('runLoop end-to-end', () => {
     process.env.PATH = originalPath;
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_VIEW;
+    delete process.env.FAKE_CLAUDE_RATE_LIMITED;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -66,6 +67,7 @@ describe('runLoop end-to-end', () => {
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
+      maxRetryCount: 10,
     };
 
     await runLoop(config, workDir, 1);
@@ -118,6 +120,7 @@ describe('runLoop end-to-end', () => {
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
+      maxRetryCount: 10,
     };
 
     await runLoop(config, workDir, 1);
@@ -132,5 +135,34 @@ describe('runLoop end-to-end', () => {
       encoding: 'utf-8',
     }).trim();
     expect(currentBranch).toBe('harness/issue-1-test-issue');
+  });
+
+  it('gives up after maxRetryCount consecutive rate limits instead of retrying forever', async () => {
+    process.env.FAKE_CLAUDE_RATE_LIMITED = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 2,
+    };
+
+    // maxRetryCount = 2 means 3 total attempts (retryCount goes 1, 2, 3) before giving up;
+    // one runLoop iteration per attempt since a persisted state is resumed directly.
+    await runLoop(config, workDir, 3);
+
+    expect(existsSync(prMarker)).toBe(false);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('limite de 2 tentatives');
+
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
   });
 });

@@ -122,6 +122,20 @@ async function handleIssue(
 
   if (result.rateLimited) {
     retryCount += 1;
+
+    if (retryCount > config.maxRetryCount) {
+      console.log(
+        `Issue #${issue.number} hit the rate-limit retry cap (${config.maxRetryCount}), giving up`,
+      );
+      await commentOnIssue(
+        config.githubRepo,
+        issue,
+        `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
+      );
+      clearState(cwd);
+      return;
+    }
+
     const delay = Math.min(config.baseRetryDelayMs * 2 ** retryCount, config.maxRetryDelayMs);
     saveState(
       { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
