@@ -31,6 +31,22 @@ const AGENT_IDENTITIES: Record<string, AgentIdentity> = {
 };
 
 /**
+ * Substrings that, when found (case-insensitively) in the subtype/errors/stderr of a
+ * `claude -p` invocation, indicate it was cut short by a usage/rate limit.
+ *
+ * Kept as a standalone list (rather than inlined) so new plausible formats can be added
+ * without touching the matching logic itself.
+ */
+const RATE_LIMIT_PATTERNS = [
+  'rate_limit',
+  'rate limit',
+  'usage_limit',
+  'usage limit',
+  '429',
+  'too many requests',
+];
+
+/**
  * Detects whether a `claude -p` invocation was cut short by hitting a usage/rate limit.
  *
  * Isolated on purpose: the exact subtype/message used by `claude -p` to signal
@@ -38,13 +54,21 @@ const AGENT_IDENTITIES: Record<string, AgentIdentity> = {
  * function needs updating.
  */
 export function isRateLimitError(parsed: ClaudeJsonOutput | undefined, stderr: string): boolean {
-  const haystack =
-    `${parsed?.subtype ?? ''} ${(parsed?.errors ?? []).join(' ')} ${stderr}`.toLowerCase();
-  return (
-    haystack.includes('rate_limit') ||
-    haystack.includes('usage_limit') ||
-    haystack.includes('usage limit')
-  );
+  const haystack = `${parsed?.subtype ?? ''} ${(parsed?.errors ?? []).join(' ')} ${
+    parsed?.result ?? ''
+  } ${stderr}`.toLowerCase();
+  return RATE_LIMIT_PATTERNS.some((pattern) => haystack.includes(pattern));
+}
+
+/**
+ * Gates whether `isRateLimitError` should even be consulted. It scans `result` (the agent's
+ * free-text summary) alongside `subtype`/`errors`/`stderr`, so calling it on a *successful* run
+ * risks a false positive if the summary happens to mention rate limits or "429" - exactly what
+ * happened when code-reviewer analyzed this repo's own rate-limit-detection code and its own
+ * summary triggered the heuristic. Only a run that already errored should be checked.
+ */
+export function shouldCheckRateLimit(parsed: ClaudeJsonOutput | undefined): boolean {
+  return !parsed || parsed.is_error;
 }
 
 /**
@@ -95,11 +119,20 @@ async function runAgent(
     parsed = undefined;
   }
 
-  if (isRateLimitError(parsed, proc.stderr ?? '')) {
-    return { success: false, rateLimited: true };
-  }
+  if (shouldCheckRateLimit(parsed)) {
+    if (isRateLimitError(parsed, proc.stderr ?? '')) {
+      return { success: false, rateLimited: true };
+    }
 
-  if (!parsed || parsed.is_error) {
+    // The rate-limit heuristic in isRateLimitError() is undocumented and can miss real
+    // rate-limit responses in a format it doesn't recognize yet. Logging the raw output here
+    // makes it possible to spot those misses after the fact and extend RATE_LIMIT_PATTERNS.
+    if (parsed?.is_error) {
+      console.error('claude -p returned is_error=true but was not classified as rate-limited:');
+      console.error(JSON.stringify(parsed));
+      if (proc.stderr) console.error(`stderr: ${proc.stderr}`);
+    }
+
     return {
       success: false,
       rateLimited: false,
