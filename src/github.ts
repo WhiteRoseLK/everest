@@ -49,6 +49,28 @@ export function branchNameFor(issue: Issue): string {
   return `harness/issue-${issue.number}-${slugify(issue.title)}`;
 }
 
+/**
+ * Checks whether a branch already has an open PR against it. An issue stays "open" on GitHub
+ * until its PR is merged, so without this check the harness would retry the same issue on every
+ * loop iteration and collide with the branch it already created.
+ */
+export async function hasOpenPullRequest(repo: string, branch: string): Promise<boolean> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'list',
+    '--repo',
+    repo,
+    '--head',
+    branch,
+    '--state',
+    'open',
+    '--json',
+    'number',
+  ]);
+  const prs = JSON.parse(stdout) as Array<{ number: number }>;
+  return prs.length > 0;
+}
+
 /** Creates and checks out a new branch for an issue being processed for the first time. */
 export async function createBranch(branch: string, cwd: string): Promise<void> {
   await execFileAsync('git', ['checkout', '-b', branch], { cwd });

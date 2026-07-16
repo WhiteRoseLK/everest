@@ -6,6 +6,11 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  echo '[]'
+  exit 0
+fi
+
 if [ "$1" = "pr" ] && [ "$2" = "create" ]; then
   echo "$@" > "$FAKE_GH_PR_MARKER"
   echo "https://example.invalid/pr/1"

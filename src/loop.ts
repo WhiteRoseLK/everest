@@ -7,6 +7,7 @@ import {
   pushBranch,
   openPullRequest,
   commentOnIssue,
+  hasOpenPullRequest,
   type Issue,
 } from './github.js';
 import { runClaudeCode, type ClaudeResult } from './claude.js';
@@ -30,6 +31,18 @@ export function pickNextIssue(issues: Issue[]): Issue | null {
     if (aPriority !== bPriority) return aPriority - bPriority;
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   })[0];
+}
+
+/**
+ * Excludes issues that already have an open PR against their harness branch. An issue stays
+ * "open" on GitHub until its PR merges, so without this the loop would retry it forever and
+ * collide with the branch it already created.
+ */
+async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise<Issue[]> {
+  const flags = await Promise.all(
+    issues.map((issue) => hasOpenPullRequest(repo, branchNameFor(issue))),
+  );
+  return issues.filter((_, index) => !flags[index]);
 }
 
 async function handleIssue(
@@ -100,7 +113,8 @@ export async function runLoop(config: Config, cwd: string, iterations = Infinity
       issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
     } else {
       const issues = await listOpenIssues(config.githubRepo);
-      issue = pickNextIssue(issues);
+      const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+      issue = pickNextIssue(candidates);
     }
 
     if (!issue) {
