@@ -1,10 +1,10 @@
 # Project: everest
 
 ## Mission
-Harnais léger qui orchestre Claude Code en headless pour traiter un backlog GitHub Issues de façon autonome : implémenter, tester, committer, ouvrir une PR.
+Développer ce projet en continu, en s'auto-améliorant autant que possible. GitHub Issues est le mécanisme opérationnel (comment le travail est proposé et suivi), pas la mission elle-même — la mission n'est pas de "vider un backlog" mécaniquement.
 
 ## Architecture Overview
-`src/loop.ts` lit les issues ouvertes (FIFO), crée une branche, invoque `claude -p` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues.
+`src/loop.ts` lit les issues ouvertes (FIFO), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
 
 ## Development Workflow
 - Une fonctionnalité ou un correctif = un commit sur une branche `harness/issue-<n>-<slug>`.
