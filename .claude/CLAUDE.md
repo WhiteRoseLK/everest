@@ -18,7 +18,9 @@ Le merge lui-même reste toujours un geste humain, y compris après approbation 
 
 ## CI
 
-`.github/workflows/ci.yml` relance lint + test sur chaque PR, indépendamment des agents. Un check obligatoire (branch protection sur `main`) empêche le merge si CI échoue, même en cliquant le bouton sur GitHub — le gate le plus robuste des trois (hook local Husky contournable avec `--no-verify`, review d'agent contournable en théorie, CI+branch protection non contournable par un contributeur standard).
+`.github/workflows/ci.yml` relance lint + test sur chaque PR, indépendamment des agents. Un check obligatoire (branch protection sur `main`, check `lint-and-test`, `enforce_admins: true`) empêche le merge si CI échoue, même en cliquant le bouton sur GitHub — le gate le plus robuste des trois (hook local Husky contournable avec `--no-verify`, review d'agent contournable en théorie, CI+branch protection non contournable par un contributeur standard).
+
+Note : la branch protection classique et les rulesets GitHub ne sont pas disponibles sur un repo privé avec un compte gratuit (403 "Upgrade to GitHub Pro or make this repository public"). Le repo `everest` a été rendu **public** (décision explicite) pour débloquer cette fonctionnalité.
 
 ## Agent Identities
 
