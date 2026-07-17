@@ -19,7 +19,14 @@ taper des commandes `gh` à la main :
 node bin/everest.js ask "<message>" [--priority <critical|high|medium|low>]  # crée une issue
 node bin/everest.js status                                                   # PR ouvertes + issues fermées récemment
 node bin/everest.js blockers                                                 # PR labellisées needs-human + dernier commentaire
+node bin/everest.js watch [--interval <ms>]                                  # poll continu (façon `watch`) des blockers/needs-fixup
 ```
+
+`watch` réaffiche périodiquement (intervalle `--interval`, défaut `WATCH_POLL_INTERVAL_MS`,
+30s) les PR labellisées `needs-human` (avec leur dernier commentaire) et celles encore en boucle
+de review (`needs-fixup`), sans qu'il faille relancer `blockers` à la main. Réutilise
+`listBlockers`/`listHarnessPullRequests` (`src/github.ts`), pas de nouveau service - juste un
+intervalle de poll côté CLI, comme `pollIntervalMs` dans `src/loop.ts`.
 
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 

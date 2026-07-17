@@ -10,6 +10,8 @@ import {
 /** Lookback window used by `everest status` when reporting recently closed issues. */
 const RECENT_ISSUES_WINDOW_HOURS = 24;
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function printUsage(): void {
   console.log(
     [
@@ -17,6 +19,7 @@ function printUsage(): void {
       '  everest ask "<message>" [--priority <critical|high|medium|low>]',
       '  everest status',
       '  everest blockers',
+      '  everest watch [--interval <ms>]',
     ].join('\n'),
   );
 }
@@ -82,8 +85,86 @@ async function runBlockers(repo: string): Promise<void> {
 }
 
 /**
- * Entry point for the `everest` CLI: dispatches to the `ask`/`status`/`blockers` subcommands so
- * the harness can be operated directly instead of through hand-typed `gh` commands.
+ * Renders one `everest watch` snapshot: blockers (`needs-human`) plus PRs still going through the
+ * `needs-fixup` review loop. Reuses `listBlockers`/`listHarnessPullRequests` (`src/github.ts`)
+ * rather than a dedicated watch-specific GitHub query.
+ */
+async function renderWatchSnapshot(repo: string, intervalMs: number): Promise<void> {
+  const [blockers, pullRequests] = await Promise.all([
+    listBlockers(repo),
+    listHarnessPullRequests(repo),
+  ]);
+  const needsFixup = pullRequests.filter((pr) => pr.status === 'needs-fixup');
+
+  // Only clear an interactive terminal - in a non-TTY context (e.g. piped output, tests) a clear
+  // would just inject raw ANSI escape codes into the stream for no benefit.
+  if (process.stdout.isTTY) console.clear();
+
+  console.log(
+    `everest watch - ${new Date().toLocaleTimeString()} (polling every ${intervalMs}ms, Ctrl+C to stop)`,
+  );
+  console.log();
+  console.log('Needs human (blocking):');
+  if (blockers.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const blocker of blockers) {
+      console.log(`  #${blocker.number} ${blocker.title} [${blocker.branch}]`);
+      console.log(`    Last comment: ${blocker.lastComment ?? '(no comment)'}`);
+    }
+  }
+  console.log();
+  console.log('Needs fixup (review loop in progress):');
+  if (needsFixup.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const pr of needsFixup) {
+      console.log(`  #${pr.number} issue #${pr.issueNumber} [${pr.branch}]`);
+    }
+  }
+}
+
+/**
+ * Handles `everest watch`: polls blockers/needs-fixup PRs every `intervalMs` and re-renders the
+ * terminal, so an operator can leave it running instead of re-invoking `everest blockers`
+ * manually. Runs for `iterations` cycles (default: forever) - the finite form exists so the
+ * polling loop is testable without a real wall-clock wait.
+ *
+ * Each iteration is isolated in its own try/catch, mirroring `runLoop` (`src/loop.ts`): a
+ * transient `gh` failure (network blip, rate limit, auth hiccup) on one poll must not kill the
+ * whole `watch` process, it should just be reported and retried on the next cycle.
+ */
+export async function runWatch(
+  repo: string,
+  intervalMs: number,
+  iterations = Infinity,
+): Promise<void> {
+  for (let i = 0; i < iterations; i += 1) {
+    try {
+      await renderWatchSnapshot(repo, intervalMs);
+    } catch (error) {
+      console.error('Failed to fetch watch snapshot, retrying next poll:');
+      console.error(error);
+    }
+    if (i < iterations - 1) await sleep(intervalMs);
+  }
+}
+
+/** Parses the optional `--interval <ms>` flag shared by watch-like subcommands. */
+function parseIntervalFlag(args: string[], fallback: number): number {
+  const index = args.indexOf('--interval');
+  if (index === -1) return fallback;
+  const value = Number(args[index + 1]);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('--interval must be a positive number of milliseconds');
+  }
+  return value;
+}
+
+/**
+ * Entry point for the `everest` CLI: dispatches to the `ask`/`status`/`blockers`/`watch`
+ * subcommands so the harness can be operated directly instead of through hand-typed `gh`
+ * commands.
  */
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
@@ -103,6 +184,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'blockers':
       await runBlockers(config.githubRepo);
+      break;
+    case 'watch':
+      await runWatch(config.githubRepo, parseIntervalFlag(rest, config.watchPollIntervalMs));
       break;
     default:
       printUsage();

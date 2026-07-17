@@ -6,6 +6,7 @@ export interface Config {
   maxBudgetUsdPerReview: number;
   maxReviewCycles: number;
   pollIntervalMs: number;
+  watchPollIntervalMs: number;
   baseRetryDelayMs: number;
   maxRetryDelayMs: number;
   maxRetryCount: number;
@@ -30,6 +31,7 @@ export function loadConfig(): Config {
     maxBudgetUsdPerReview: numberEnv('MAX_BUDGET_USD_PER_REVIEW', 1),
     maxReviewCycles: numberEnv('MAX_REVIEW_CYCLES', 3),
     pollIntervalMs: numberEnv('POLL_INTERVAL_MS', 60_000),
+    watchPollIntervalMs: numberEnv('WATCH_POLL_INTERVAL_MS', 30_000),
     baseRetryDelayMs: numberEnv('BASE_RETRY_DELAY_MS', 60_000),
     maxRetryDelayMs: numberEnv('MAX_RETRY_DELAY_MS', 3_600_000),
     maxRetryCount: numberEnv('MAX_RETRY_COUNT', 10),
