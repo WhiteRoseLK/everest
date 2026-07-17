@@ -24,6 +24,11 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
 fi
 
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  if [ -f "${FAKE_GH_PR_LIST_FAIL_ONCE:-}" ]; then
+    rm -f "$FAKE_GH_PR_LIST_FAIL_ONCE"
+    echo "fake gh: simulated transient failure" >&2
+    exit 1
+  fi
   # `listBlockers` (src/github.ts) passes `--label needs-human` to filter server-side. Mirror
   # that here via a dedicated env var so tests can distinguish it from the unfiltered
   # `listHarnessPullRequests`/`findResumablePullRequest` calls, which share FAKE_GH_PR_LIST.

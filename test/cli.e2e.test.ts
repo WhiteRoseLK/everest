@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { main, runWatch } from '../src/cli.js';
@@ -11,6 +11,7 @@ describe('everest CLI end-to-end', () => {
   let originalPath: string | undefined;
   let originalRepo: string | undefined;
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'everest-cli-e2e-'));
@@ -19,6 +20,7 @@ describe('everest CLI end-to-end', () => {
     process.env.PATH = `${FAKE_BIN}:${originalPath}`;
     process.env.GITHUB_REPO = 'fake/repo';
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
@@ -29,7 +31,9 @@ describe('everest CLI end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN;
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
+    delete process.env.FAKE_GH_PR_LIST_FAIL_ONCE;
     logSpy.mockRestore();
+    errorSpy.mockRestore();
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -140,5 +144,25 @@ describe('everest CLI end-to-end', () => {
     expect(output).toContain('Needs human (blocking):\n  (none)'.split('\n')[0]);
     const noneCount = logSpy.mock.calls.filter((call) => call[0] === '  (none)').length;
     expect(noneCount).toBe(2);
+  });
+
+  it('watch survives a transient gh failure on one iteration and still renders the next', async () => {
+    const failMarker = join(tmpRoot, 'pr-list-fail-once.marker');
+    writeFileSync(failMarker, '');
+    process.env.FAKE_GH_PR_LIST_FAIL_ONCE = failMarker;
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([]);
+
+    // Iteration 1's `gh pr list` call fails once (simulated transient error); a poll loop meant
+    // to run unattended must not die on that - it should log the error and keep polling.
+    await runWatch('fake/repo', 1, 2);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to fetch watch snapshot'),
+    );
+    const snapshotCount = logSpy.mock.calls.filter((call) =>
+      String(call[0]).startsWith('everest watch -'),
+    ).length;
+    // Iteration 1 fails before it can render a snapshot; iteration 2 succeeds and renders one.
+    expect(snapshotCount).toBe(1);
   });
 });

@@ -47,3 +47,10 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   nu et se fait flaguer `'process'/'console' is not defined`. Il faut soit rester en `.ts`, soit
   ajouter un bloc `languageOptions.globals` dédié dans `eslint.config.js` pour ce chemin (voir le
   bloc `files: ['bin/**/*.js']`).
+
+- 2026-07-17 (issue #26 / PR #28) : tout poll loop de longue durée destiné à tourner sans
+  supervision (`runLoop` dans `src/loop.ts`, `runWatch` dans `src/cli.ts`) doit isoler chaque
+  itération dans son propre try/catch (log + continue) plutôt que laisser une erreur `gh`
+  transitoire (réseau, rate limit, auth) remonter et tuer tout le process. Deuxième occurrence de
+  ce même bug (repéré une première fois sur `runLoop`, voir entrée PR #22 ci-dessus) : à
+  généraliser par défaut sur toute future commande de polling.

@@ -129,6 +129,10 @@ async function renderWatchSnapshot(repo: string, intervalMs: number): Promise<vo
  * terminal, so an operator can leave it running instead of re-invoking `everest blockers`
  * manually. Runs for `iterations` cycles (default: forever) - the finite form exists so the
  * polling loop is testable without a real wall-clock wait.
+ *
+ * Each iteration is isolated in its own try/catch, mirroring `runLoop` (`src/loop.ts`): a
+ * transient `gh` failure (network blip, rate limit, auth hiccup) on one poll must not kill the
+ * whole `watch` process, it should just be reported and retried on the next cycle.
  */
 export async function runWatch(
   repo: string,
@@ -136,7 +140,12 @@ export async function runWatch(
   iterations = Infinity,
 ): Promise<void> {
   for (let i = 0; i < iterations; i += 1) {
-    await renderWatchSnapshot(repo, intervalMs);
+    try {
+      await renderWatchSnapshot(repo, intervalMs);
+    } catch (error) {
+      console.error('Failed to fetch watch snapshot, retrying next poll:');
+      console.error(error);
+    }
     if (i < iterations - 1) await sleep(intervalMs);
   }
 }
