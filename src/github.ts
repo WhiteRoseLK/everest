@@ -332,3 +332,165 @@ export async function commentOnIssue(repo: string, issue: Issue, body: string): 
     body,
   ]);
 }
+
+/**
+ * Creates a new GitHub issue via `gh issue create`, used by the `everest ask` CLI command so
+ * work can be handed to the harness without dropping into `gh` by hand. When `priority` is set,
+ * ensures the corresponding `priority:<level>` label exists (mirroring {@link addLabel}) and
+ * applies it, so {@link Issue.labels}-based sorting (see `pickNextIssue` in `src/loop.ts`) picks
+ * it up correctly. Returns the URL of the created issue, as printed by `gh`.
+ */
+export async function createIssue(
+  repo: string,
+  message: string,
+  priority?: string,
+): Promise<string> {
+  const args = ['issue', 'create', '--repo', repo, '--title', message, '--body', message];
+
+  if (priority) {
+    const label = `priority:${priority}`;
+    await execFileAsync('gh', [
+      'label',
+      'create',
+      label,
+      '--repo',
+      repo,
+      '--color',
+      'BFD4F2',
+      '--description',
+      `Priority: ${priority}`,
+      '--force',
+    ]);
+    args.push('--label', label);
+  }
+
+  const { stdout } = await execFileAsync('gh', args);
+  return stdout.trim();
+}
+
+/** Status of a harness PR as surfaced by `everest status`, derived from its labels. */
+export type HarnessPullRequestStatus = 'open' | 'needs-fixup' | 'needs-human';
+
+export interface HarnessPullRequestSummary {
+  number: number;
+  branch: string;
+  issueNumber: number;
+  status: HarnessPullRequestStatus;
+}
+
+/**
+ * Lists open harness PRs (branch prefixed `harness/issue-<n>-`) with a status derived from their
+ * labels (`needs-human` takes precedence over `needs-fixup`, otherwise plain `open`), used by
+ * `everest status`.
+ */
+export async function listHarnessPullRequests(repo: string): Promise<HarnessPullRequestSummary[]> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'open',
+    '--json',
+    'number,headRefName,labels',
+  ]);
+  const prs = JSON.parse(stdout) as Array<{
+    number: number;
+    headRefName: string;
+    labels: Array<{ name: string }>;
+  }>;
+
+  const summaries: HarnessPullRequestSummary[] = [];
+  for (const pr of prs) {
+    const match = HARNESS_BRANCH_ISSUE_PATTERN.exec(pr.headRefName);
+    if (!match) continue;
+    const labelNames = pr.labels.map((label) => label.name);
+    const status: HarnessPullRequestStatus = labelNames.includes(NEEDS_HUMAN_LABEL)
+      ? 'needs-human'
+      : labelNames.includes(NEEDS_FIXUP_LABEL)
+        ? 'needs-fixup'
+        : 'open';
+    summaries.push({
+      number: pr.number,
+      branch: pr.headRefName,
+      issueNumber: Number(match[1]),
+      status,
+    });
+  }
+  return summaries;
+}
+
+export interface ClosedIssueSummary {
+  number: number;
+  title: string;
+  closedAt: string;
+}
+
+/**
+ * Lists issues closed within the last `hours` hours, used by `everest status` to show what the
+ * harness has recently finished without requiring the caller to page through all closed issues.
+ */
+export async function listRecentlyClosedIssues(
+  repo: string,
+  hours: number,
+): Promise<ClosedIssueSummary[]> {
+  const { stdout } = await execFileAsync('gh', [
+    'issue',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'closed',
+    '--json',
+    'number,title,closedAt',
+    '--limit',
+    '50',
+  ]);
+  const raw = JSON.parse(stdout) as Array<{
+    number: number;
+    title: string;
+    closedAt: string | null;
+  }>;
+  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+  return raw
+    .filter((issue) => issue.closedAt !== null && new Date(issue.closedAt).getTime() >= cutoff)
+    .map((issue) => ({ number: issue.number, title: issue.title, closedAt: issue.closedAt! }));
+}
+
+export interface Blocker {
+  number: number;
+  title: string;
+  branch: string;
+  lastComment: string | null;
+}
+
+/**
+ * Lists open PRs labeled {@link NEEDS_HUMAN_LABEL} along with their most recent comment, used by
+ * `everest blockers` so a human knows what needs attention and why without opening GitHub.
+ */
+export async function listBlockers(repo: string): Promise<Blocker[]> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'open',
+    '--label',
+    NEEDS_HUMAN_LABEL,
+    '--json',
+    'number,title,headRefName,comments',
+  ]);
+  const raw = JSON.parse(stdout) as Array<{
+    number: number;
+    title: string;
+    headRefName: string;
+    comments: Array<{ body: string }>;
+  }>;
+  return raw.map((pr) => ({
+    number: pr.number,
+    title: pr.title,
+    branch: pr.headRefName,
+    lastComment: pr.comments.length > 0 ? pr.comments[pr.comments.length - 1].body : null,
+  }));
+}
