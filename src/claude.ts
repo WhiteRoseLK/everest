@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { currentCommit, setGitIdentity } from './github.js';
 import { memorySection } from './prompt.js';
 import { recordCost } from './cost.js';
@@ -75,11 +75,42 @@ export function shouldCheckRateLimit(parsed: ClaudeJsonOutput | undefined): bool
 }
 
 /**
+ * Spawns the `claude` CLI asynchronously (never blocking the Node event loop), and resolves with
+ * its buffered stdout/stderr once it exits. Using the non-blocking `spawn` (rather than
+ * `spawnSync`) is what makes running several agent invocations concurrently (e.g. one per
+ * worktree, see `src/worktree.ts`) an actual wall-clock speedup instead of several blocking calls
+ * that just happen to be queued via `Promise.all` - `spawnSync` would freeze the whole process for
+ * the duration of each call, serializing them regardless of how the callers are structured.
+ */
+function spawnClaude(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn('claude', args, { cwd });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    proc.on('close', () => resolve({ stdout, stderr }));
+  });
+}
+
+/**
  * Runs a named subagent (defined in `.claude/agents/`) headlessly, after setting the git
  * identity matching that agent. Returns whether it completed without error or hit a rate limit;
  * callers add their own success criteria on top (e.g. "did it produce a commit"). `label`
  * identifies what this invocation was for (e.g. an issue number or branch) and is only used to
  * tag the recorded cost entry (see `recordCost`).
+ *
+ * Known limitation: `setGitIdentity` writes the shared repo-local git config, not a
+ * worktree-scoped one. When several worktrees run concurrently (`maxParallelIssues > 1`), two
+ * invocations setting different identities at nearly the same time could race and leave a commit
+ * attributed to the wrong agent. This only affects commit metadata, never the actual work
+ * product, so it's accepted as a known limitation rather than solved with per-worktree git config
+ * (`extensions.worktreeConfig`) - not worth the added complexity unless misattribution turns out
+ * to matter in practice.
  */
 async function runAgent(
   agentName: string,
@@ -101,8 +132,7 @@ async function runAgent(
   // test` and `git commit`) still gets silently denied in headless mode with
   // no one to approve it. This is only safe because the harness runs inside
   // the Docker sandbox (see Dockerfile).
-  const proc = spawnSync(
-    'claude',
+  const proc = await spawnClaude(
     [
       '-p',
       prompt,
@@ -115,7 +145,7 @@ async function runAgent(
       '--max-budget-usd',
       String(maxBudgetUsd),
     ],
-    { cwd, encoding: 'utf-8' },
+    cwd,
   );
 
   let parsed: ClaudeJsonOutput | undefined;

@@ -18,6 +18,7 @@ import {
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
 import { buildPrompt, buildFixupPrompt } from './prompt.js';
+import { createWorktree, removeWorktree } from './worktree.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -40,17 +41,35 @@ function priorityRank(issue: Issue): number {
 }
 
 /**
- * Selects the next issue to process: issues are ordered by priority tier (see
- * {@link PRIORITY_TIERS}, most urgent first), then oldest first (FIFO) within each tier.
+ * Sorts issues by priority tier (see {@link PRIORITY_TIERS}, most urgent first), then oldest
+ * first (FIFO) within each tier. Shared by {@link pickNextIssue} and {@link pickNextIssues}.
  */
-export function pickNextIssue(issues: Issue[]): Issue | null {
-  if (issues.length === 0) return null;
+function sortByPriority(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) => {
     const aPriority = priorityRank(a);
     const bPriority = priorityRank(b);
     if (aPriority !== bPriority) return aPriority - bPriority;
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-  })[0];
+  });
+}
+
+/**
+ * Selects the next issue to process: issues are ordered by priority tier (see
+ * {@link PRIORITY_TIERS}, most urgent first), then oldest first (FIFO) within each tier.
+ */
+export function pickNextIssue(issues: Issue[]): Issue | null {
+  if (issues.length === 0) return null;
+  return sortByPriority(issues)[0];
+}
+
+/**
+ * Selects up to `count` issues to process concurrently (see {@link pickNextIssue} for the
+ * ordering), used when `maxParallelIssues > 1`. Each issue is independent - there's no attempt to
+ * detect issues that might touch overlapping files, matching the "launch budget, not a
+ * dependency scheduler" scope from issue #15.
+ */
+export function pickNextIssues(issues: Issue[], count: number): Issue[] {
+  return sortByPriority(issues).slice(0, Math.max(0, count));
 }
 
 /**
@@ -123,30 +142,22 @@ async function runReviewLoop(
   await markPullRequestNeedsHuman(config.githubRepo, branch);
 }
 
-async function handleIssue(
+/**
+ * Runs one attempt of issue-worker against an issue whose branch is already checked out at
+ * `cwd`, then handles the outcome: on a rate limit, checkpoints `retryCount` to `.harness/
+ * state.json` and sleeps before returning (the caller is expected to call this again - either the
+ * next `runLoop` iteration resuming persisted state, or the retry loop in
+ * {@link handleIssueInWorktree} for parallel processing); on success, pushes, opens the PR and
+ * runs the review loop; on failure, comments on the issue. Always clears state on a terminal
+ * outcome (give-up, success, or failure).
+ */
+async function processIssueOnBranch(
   issue: Issue,
-  state: HarnessState | null,
+  branch: string,
+  retryCount: number,
   config: Config,
   cwd: string,
 ): Promise<void> {
-  let branch: string;
-  let retryCount: number;
-
-  if (state && state.issueNumber === issue.number) {
-    branch = state.branch;
-    retryCount = state.retryCount;
-    await checkoutBranch(branch, cwd);
-  } else {
-    branch = branchNameFor(issue);
-    retryCount = 0;
-    await checkoutMain(cwd);
-    await createBranch(branch, cwd);
-    saveState(
-      { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
-      cwd,
-    );
-  }
-
   const result: ClaudeResult = await runClaudeCode(
     buildPrompt(issue, cwd),
     cwd,
@@ -198,6 +209,58 @@ async function handleIssue(
   clearState(cwd);
 }
 
+async function handleIssue(
+  issue: Issue,
+  state: HarnessState | null,
+  config: Config,
+  cwd: string,
+): Promise<void> {
+  let branch: string;
+  let retryCount: number;
+
+  if (state && state.issueNumber === issue.number) {
+    branch = state.branch;
+    retryCount = state.retryCount;
+    await checkoutBranch(branch, cwd);
+  } else {
+    branch = branchNameFor(issue);
+    retryCount = 0;
+    await checkoutMain(cwd);
+    await createBranch(branch, cwd);
+    saveState(
+      { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
+      cwd,
+    );
+  }
+
+  await processIssueOnBranch(issue, branch, retryCount, config, cwd);
+}
+
+/**
+ * Processes one issue inside its own git worktree so it can run concurrently with other issues
+ * (see `src/worktree.ts`), used when `maxParallelIssues > 1`. Unlike the sequential path, a
+ * rate-limited attempt is retried in-process (the worktree is transient - it wouldn't survive a
+ * harness restart anyway, so there's no persisted state to resume across `runLoop` iterations).
+ * The worktree is always removed afterwards, regardless of outcome.
+ */
+async function handleIssueInWorktree(issue: Issue, config: Config, cwd: string): Promise<void> {
+  const branch = branchNameFor(issue);
+  const worktreePath = await createWorktree(branch, cwd);
+
+  try {
+    let retryCount = 0;
+    let pending = true;
+    while (pending) {
+      await processIssueOnBranch(issue, branch, retryCount, config, worktreePath);
+      const state = loadState(worktreePath);
+      pending = state !== null;
+      retryCount = state?.retryCount ?? 0;
+    }
+  } finally {
+    await removeWorktree(worktreePath, cwd);
+  }
+}
+
 /**
  * Resumes the review loop on an already-open harness PR left with `CHANGES_REQUESTED`, e.g.
  * because the harness stopped between opening the PR and it getting approved. Returns whether
@@ -237,6 +300,25 @@ export async function runLoop(config: Config, cwd: string, iterations = Infinity
 
     const issues = await listOpenIssues(config.githubRepo);
     const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+
+    if (config.maxParallelIssues > 1) {
+      const batch = pickNextIssues(candidates, config.maxParallelIssues);
+      if (batch.length === 0) {
+        await sleep(config.pollIntervalMs);
+        continue;
+      }
+
+      // checkoutMain here (rather than inside handleIssueInWorktree) so every worktree in the
+      // batch branches off the same up-to-date main, and so it only happens once per batch
+      // instead of once per issue.
+      await checkoutMain(cwd);
+      console.log(
+        `Processing ${batch.length} issue(s) in parallel: ${batch.map((i) => `#${i.number}`).join(', ')}`,
+      );
+      await Promise.all(batch.map((issue) => handleIssueInWorktree(issue, config, cwd)));
+      continue;
+    }
+
     const issue: Issue | null = pickNextIssue(candidates);
 
     if (!issue) {

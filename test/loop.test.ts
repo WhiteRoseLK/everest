@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickNextIssue } from '../src/loop.js';
+import { pickNextIssue, pickNextIssues } from '../src/loop.js';
 import type { Issue } from '../src/github.js';
 
 function makeIssue(number: number, createdAt: string, labels: string[] = []): Issue {
@@ -65,5 +65,25 @@ describe('pickNextIssue', () => {
     const feature = makeIssue(2, '2026-01-02T00:00:00Z', ['type:feature', 'priority:high']);
 
     expect(pickNextIssue([bug, feature])).toBe(feature);
+  });
+});
+
+describe('pickNextIssues', () => {
+  it('returns up to `count` issues, most urgent/oldest first, for parallel processing', () => {
+    const low = makeIssue(1, '2026-01-01T00:00:00Z', ['priority:low']);
+    const critical = makeIssue(2, '2026-01-02T00:00:00Z', ['priority:critical']);
+    const high = makeIssue(3, '2026-01-03T00:00:00Z', ['priority:high']);
+
+    expect(pickNextIssues([low, critical, high], 2)).toEqual([critical, high]);
+  });
+
+  it('returns fewer than `count` issues when there are not enough candidates', () => {
+    const only = makeIssue(1, '2026-01-01T00:00:00Z');
+
+    expect(pickNextIssues([only], 3)).toEqual([only]);
+  });
+
+  it('returns an empty array when there are no candidates', () => {
+    expect(pickNextIssues([], 3)).toEqual([]);
   });
 });
