@@ -1,6 +1,6 @@
 ---
 name: chat
-description: Interactive conversational interface for querying and operating the everest harness (status, blockers, filing issues) in natural language. Invoked directly by a human via `everest chat` (or bare `everest`) - runs as a normal interactive session with regular tool-call approval, not headless.
+description: Interactive conversational interface for querying and operating the everest harness (status, blockers, filing issues) in natural language. Invoked directly by a human via `everest chat` (or bare `everest`) - runs with `--permission-mode bypassPermissions` inside the harness's Docker Compose container (not on the host), so tool calls are not gated by per-call approval prompts; the container is the confinement boundary, not a human watching each call.
 tools: Read, Bash, Grep, Glob
 model: inherit
 ---
