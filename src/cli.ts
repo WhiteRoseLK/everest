@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadConfig } from './config.js';
 import {
@@ -10,6 +11,14 @@ import {
 
 /** Lookback window used by `everest status` when reporting recently closed issues. */
 const RECENT_ISSUES_WINDOW_HOURS = 24;
+
+/**
+ * Repository root (where `docker-compose.yml` lives), derived from this file's own location
+ * rather than `process.cwd()` - `everest` can be invoked from any directory, but the Docker
+ * Compose project it needs to start/reuse for `everest chat` (see `runChat`) is always this
+ * checkout's, not whatever directory the operator happens to be standing in.
+ */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -154,19 +163,41 @@ export async function runWatch(
 }
 
 /**
- * Handles `everest chat` (and bare `everest`): opens an interactive `claude` session using the
- * `chat` agent (`.claude/agents/chat.md`), so a human can converse with everest in natural
- * language instead of memorizing one-shot subcommands - the same interactive experience as using
- * Claude Code directly, just pointed at this repo's GitHub state (open PRs, blockers, filing
- * issues) via `gh`.
- *
- * Deliberately not headless (`-p`): unlike `issue-worker`/`code-reviewer`, which run unsupervised
- * inside the Docker sandbox and need `bypassPermissions`, `everest chat` is invoked directly by a
- * human sitting at the terminal, so tool-call approval works the normal interactive way (no
- * `bypassPermissions` needed or wanted here - see "Known Pitfalls" in CLAUDE.md on why headless
- * mode and blanket permission bypass are treated as a package deal confined to the sandbox).
+ * Starts (or reuses, if already running) the harness's Docker Compose service, so `runChat` has
+ * a sandbox container to run `claude` inside instead of the bare host. `docker compose up -d` is
+ * idempotent - a no-op against an already-running container - so this is safe to call on every
+ * `everest chat` invocation, whether or not a harness loop (`npm start` inside that same
+ * container) happens to already be using it.
  */
-export function runChat(repo: string): number {
+function ensureHarnessContainer(cwd: string): void {
+  const result = spawnSync('docker', ['compose', 'up', '-d', 'harness'], {
+    cwd,
+    stdio: 'inherit',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `Failed to start the harness Docker container (exit code ${result.status ?? 'unknown'}). ` +
+        `Is Docker running and is docker-compose.yml present in ${cwd}?`,
+    );
+  }
+}
+
+/**
+ * Handles `everest chat` (and bare `everest`): starts/reuses the harness's Docker Compose
+ * container (`ensureHarnessContainer`) and opens an interactive `claude` session *inside* it
+ * (`docker compose exec -it`) using the `chat` agent (`.claude/agents/chat.md`), so a human can
+ * converse with everest in natural language instead of memorizing one-shot subcommands.
+ *
+ * Unlike the previous design, this now runs `--permission-mode bypassPermissions` (same as
+ * `issue-worker`/`code-reviewer` - see `runAgent` in `src/claude.ts`): tool calls (mostly `gh`
+ * commands) execute without a per-call approval prompt, which only became safe to do here once
+ * the session was moved inside the Docker sandbox (see "Known Pitfalls" in CLAUDE.md - headless
+ * mode plus blanket permission bypass is a package deal confined to the container, and `-it`
+ * makes this an interactive TTY session rather than headless, but the confinement is what makes
+ * bypassing approval prompts acceptable, not the human's presence at the keyboard).
+ */
+export function runChat(repo: string, cwd: string = REPO_ROOT): number {
   const systemPromptAppend =
     `You are "everest chat", the conversational interface for the everest harness in ` +
     `repository ${repo}. Use the gh CLI (already authenticated, scoped to --repo ${repo}) to ` +
@@ -175,12 +206,24 @@ export function runChat(repo: string): number {
     `'everest status', 'everest blockers' and 'everest ask'. Keep answers short and ` +
     `terminal-friendly.`;
 
+  ensureHarnessContainer(cwd);
+
   const result = spawnSync(
-    'claude',
-    ['--agent', 'chat', '--append-system-prompt', systemPromptAppend],
-    {
-      stdio: 'inherit',
-    },
+    'docker',
+    [
+      'compose',
+      'exec',
+      '-it',
+      'harness',
+      'claude',
+      '--agent',
+      'chat',
+      '--permission-mode',
+      'bypassPermissions',
+      '--append-system-prompt',
+      systemPromptAppend,
+    ],
+    { cwd, stdio: 'inherit' },
   );
   if (result.error) throw result.error;
   return result.status ?? 0;
