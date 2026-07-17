@@ -1,4 +1,13 @@
-import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { config as loadDotenv } from 'dotenv';
+
+// Resolve the `.env` path relative to this module's location, not `process.cwd()`. Since
+// `everest` is installed via `npm link`, invoking it from a directory outside the project
+// root (e.g. `cd ~ && everest`) would otherwise silently fail to find the project's `.env`
+// (see issue #31).
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+loadDotenv({ path: join(moduleDir, '..', '.env') });
 
 export interface Config {
   githubRepo: string;
