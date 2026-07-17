@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -56,6 +56,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_VIEW;
     delete process.env.FAKE_CLAUDE_RATE_LIMITED;
+    delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -173,5 +174,28 @@ describe('runLoop end-to-end', () => {
 
     const statePath = join(workDir, '.harness/state.json');
     expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('survives an unexpected error in one iteration and processes the issue on the next', async () => {
+    const failMarker = join(tmpRoot, 'fail-once.marker');
+    writeFileSync(failMarker, '');
+    process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE = failMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // Iteration 1 hits the simulated `gh issue list` failure and must not crash the process;
+    // iteration 2 should proceed normally and open the PR, proving runLoop recovered.
+    await runLoop(config, workDir, 2);
+
+    expect(existsSync(prMarker)).toBe(true);
   });
 });

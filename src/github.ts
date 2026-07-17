@@ -161,8 +161,13 @@ export async function checkoutMain(cwd: string): Promise<void> {
   await execFileAsync('git', ['pull', '--ff-only', 'origin', 'main'], { cwd });
 }
 
-/** Creates and checks out a new branch for an issue being processed for the first time. */
+/**
+ * Creates and checks out a new branch for an issue being processed for the first time. Deletes
+ * any stale local branch of the same name first (never pushed, so safe to discard) - left over
+ * from a previous attempt that failed before committing, e.g. hitting the per-issue budget cap.
+ */
 export async function createBranch(branch: string, cwd: string): Promise<void> {
+  await execFileAsync('git', ['branch', '-D', branch], { cwd }).catch(() => undefined);
   await execFileAsync('git', ['checkout', '-b', branch], { cwd });
 }
 

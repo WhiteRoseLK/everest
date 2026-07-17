@@ -217,33 +217,52 @@ async function resumePendingReview(config: Config, cwd: string): Promise<boolean
   return true;
 }
 
+/**
+ * Runs one iteration's worth of work: resume in-progress state, resume a pending review, or
+ * pick up a new issue. Split out from {@link runLoop} so a single iteration's logic can be
+ * wrapped in error isolation without nesting the whole poll loop inside a try/catch.
+ */
+async function runIteration(config: Config, cwd: string): Promise<void> {
+  const state = loadState(cwd);
+
+  if (state) {
+    const issues = await listOpenIssues(config.githubRepo);
+    const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
+    if (!issue) {
+      await sleep(config.pollIntervalMs);
+      return;
+    }
+    await handleIssue(issue, state, config, cwd);
+    return;
+  }
+
+  if (await resumePendingReview(config, cwd)) return;
+
+  const issues = await listOpenIssues(config.githubRepo);
+  const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+  const issue: Issue | null = pickNextIssue(candidates);
+
+  if (!issue) {
+    await sleep(config.pollIntervalMs);
+    return;
+  }
+
+  await handleIssue(issue, state, config, cwd);
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(config: Config, cwd: string, iterations = Infinity): Promise<void> {
   for (let i = 0; i < iterations; i += 1) {
-    const state = loadState(cwd);
-
-    if (state) {
-      const issues = await listOpenIssues(config.githubRepo);
-      const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
-      if (!issue) {
-        await sleep(config.pollIntervalMs);
-        continue;
-      }
-      await handleIssue(issue, state, config, cwd);
-      continue;
-    }
-
-    if (await resumePendingReview(config, cwd)) continue;
-
-    const issues = await listOpenIssues(config.githubRepo);
-    const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
-    const issue: Issue | null = pickNextIssue(candidates);
-
-    if (!issue) {
+    // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
+    // never take down the whole process - that turns one bad issue into total downtime instead
+    // of one skipped cycle. Seen in practice: a stale local branch from a budget-exhausted
+    // attempt made the next `git checkout -b` throw, killing the container.
+    try {
+      await runIteration(config, cwd);
+    } catch (error) {
+      console.error('Unhandled error during loop iteration, continuing after a short delay:');
+      console.error(error);
       await sleep(config.pollIntervalMs);
-      continue;
     }
-
-    await handleIssue(issue, state, config, cwd);
   }
 }
