@@ -40,3 +40,10 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   utiliser `--no-verify` explicitement (voir `pushBranch(..., { noVerify: true })`), sinon le push
   échoue et — si l'échec n'est pas géré — peut faire boucler indéfiniment sans jamais avancer
   `retryCount`.
+
+- 2026-07-17 (issue #24) : `eslint.config.js` n'active `no-undef`-safe TS handling (globals
+  Node implicites) que pour les fichiers `**/*.ts` via `tseslint.configs.recommended` — un fichier
+  `.js` ajouté ailleurs (ex: `bin/everest.js`, wrapper CLI) tombe sous `js.configs.recommended`
+  nu et se fait flaguer `'process'/'console' is not defined`. Il faut soit rester en `.ts`, soit
+  ajouter un bloc `languageOptions.globals` dédié dans `eslint.config.js` pour ce chemin (voir le
+  bloc `files: ['bin/**/*.js']`).
