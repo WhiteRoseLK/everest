@@ -24,6 +24,13 @@ if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
 fi
 
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  # `listBlockers` (src/github.ts) passes `--label needs-human` to filter server-side. Mirror
+  # that here via a dedicated env var so tests can distinguish it from the unfiltered
+  # `listHarnessPullRequests`/`findResumablePullRequest` calls, which share FAKE_GH_PR_LIST.
+  if [[ " $* " == *" needs-human "* ]] && [ -n "${FAKE_GH_PR_LIST_NEEDS_HUMAN:-}" ]; then
+    echo "$FAKE_GH_PR_LIST_NEEDS_HUMAN"
+    exit 0
+  fi
   echo "${FAKE_GH_PR_LIST:-[]}"
   exit 0
 fi

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main } from '../src/cli.js';
+import { main, runWatch } from '../src/cli.js';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
@@ -27,6 +27,7 @@ describe('everest CLI end-to-end', () => {
     else process.env.GITHUB_REPO = originalRepo;
     delete process.env.FAKE_GH_ISSUE_CREATE_MARKER;
     delete process.env.FAKE_GH_PR_LIST;
+    delete process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN;
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
     logSpy.mockRestore();
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -89,5 +90,55 @@ describe('everest CLI end-to-end', () => {
     await main(['blockers']);
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No blockers'));
+  });
+
+  it('watch polls repeatedly and reports both needs-human blockers and needs-fixup PRs', async () => {
+    // listHarnessPullRequests (all open PRs, unfiltered) - drives the needs-fixup section.
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      {
+        number: 9,
+        title: 'Fix flaky thing',
+        headRefName: 'harness/issue-9-fix-flaky-thing',
+        labels: [{ name: 'needs-human' }],
+      },
+      {
+        number: 5,
+        title: 'Add widget',
+        headRefName: 'harness/issue-3-add-widget',
+        labels: [{ name: 'needs-fixup' }],
+      },
+    ]);
+    // listBlockers (server-side filtered to needs-human) - drives the "needs human" section.
+    process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN = JSON.stringify([
+      {
+        number: 9,
+        title: 'Fix flaky thing',
+        headRefName: 'harness/issue-9-fix-flaky-thing',
+        comments: [{ body: 'review budget exhausted, please help' }],
+      },
+    ]);
+
+    await runWatch('fake/repo', 1, 2);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('#9 Fix flaky thing [harness/issue-9-fix-flaky-thing]');
+    expect(output).toContain('review budget exhausted, please help');
+    expect(output).toContain('#5 issue #3 [harness/issue-3-add-widget]');
+    // Two iterations means two full snapshots were rendered, not just one.
+    const snapshotCount = logSpy.mock.calls.filter((call) =>
+      String(call[0]).startsWith('everest watch -'),
+    ).length;
+    expect(snapshotCount).toBe(2);
+  });
+
+  it('watch reports no blockers/fixups when nothing needs attention', async () => {
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([]);
+
+    await runWatch('fake/repo', 1, 1);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Needs human (blocking):\n  (none)'.split('\n')[0]);
+    const noneCount = logSpy.mock.calls.filter((call) => call[0] === '  (none)').length;
+    expect(noneCount).toBe(2);
   });
 });
