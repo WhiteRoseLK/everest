@@ -14,6 +14,7 @@ import {
   NEEDS_FIXUP_LABEL,
   findResumablePullRequest,
   markPullRequestNeedsHuman,
+  commitWorkInProgress,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -182,7 +183,49 @@ async function handleIssue(
     return;
   }
 
-  if (result.success) {
+  if (result.budgetExceeded) {
+    // The per-invocation budget is a guardrail on the subagent's sprint, not a verdict on the
+    // issue: checkpoint whatever exists and let the review loop (already built for exactly this
+    // "not done yet" situation) decide whether to continue, rather than abandoning the issue.
+    const committed = await commitWorkInProgress(
+      cwd,
+      `WIP checkpoint: issue #${issue.number} (budget reached)`,
+    );
+
+    if (!committed) {
+      retryCount += 1;
+      if (retryCount > config.maxRetryCount) {
+        console.log(
+          `Issue #${issue.number} made no committable progress across ${config.maxRetryCount} sprints, giving up`,
+        );
+        await commentOnIssue(
+          config.githubRepo,
+          issue,
+          `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+        );
+        clearState(cwd);
+        return;
+      }
+      saveState(
+        { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
+        cwd,
+      );
+      console.log(
+        `Issue #${issue.number} sprint ${retryCount} hit its budget with nothing to checkpoint, retrying with a fresh sprint`,
+      );
+      return;
+    }
+
+    console.log(
+      `Issue #${issue.number} hit its per-sprint budget; checkpointed progress, handing off to review`,
+    );
+    await pushBranch(branch, cwd);
+    if (!(await hasOpenPullRequest(config.githubRepo, branch))) {
+      await openPullRequest(config.githubRepo, issue, branch, cwd);
+      console.log(`Opened WIP PR for issue #${issue.number}`);
+    }
+    await runReviewLoop(issue, branch, config, cwd);
+  } else if (result.success) {
     await pushBranch(branch, cwd);
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);

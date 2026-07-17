@@ -23,6 +23,16 @@ Si `needs-fixup` : le harnais rappelle `issue-worker` sur la même branche avec 
 
 Avant de créer une nouvelle branche pour l'issue suivante, le harnais fait `checkoutMain()` (checkout + `pull --ff-only`) plutôt que de partir de la branche précédente — sinon une branche mergée-et-supprimée côté remote laisserait le prochain `git checkout -b` partir d'un historique obsolète (bug auto-repéré par le harnais, issue #17).
 
+## Budget Policy
+
+**Décision explicite de l'utilisatrice (17 juillet 2026)** : pas de budget max sur une _issue_. `MAX_BUDGET_USD_PER_ISSUE` (défaut $2) est un garde-fou sur une _invocation_ de sous-agent (un "sprint"), pas une deadline qui abandonne la tâche. Le vrai plafond global d'une issue, c'est `MAX_REVIEW_CYCLES` (un nombre de rounds, pas des dollars) — cohérent avec "les garde-fous vont sur les sous-agents, pas sur la tâche elle-même".
+
+Quand `issue-worker` épuise son budget sans finir (`ClaudeResult.budgetExceeded`, `src/claude.ts`) :
+
+1. `commitWorkInProgress()` (`src/github.ts`) committe le travail en cours sous l'identité `everest-harness` si le working tree n'est pas propre — un commit WIP, pas gaté par les hooks qualité (c'est explicitement provisoire, pas une unité de travail finie). Exclut `.harness/` du commit via pathspec, pas seulement via `.gitignore` (sinon un `.gitignore` mal configuré ferait committer l'état runtime du harnais comme si c'était du travail d'agent).
+2. S'il y a eu quelque chose à committer : push, ouverture/vérification de la PR, puis `runReviewLoop()` — le reviewer verra que c'est incomplet, postera ses observations et posera `needs-fixup`, ce qui rappelle `issue-worker` avec un budget frais. C'est le "reshuffle the cards, review, brainstorm" : on réutilise la boucle de review déjà construite pour "pas encore prêt" plutôt que d'inventer un nouveau mécanisme.
+3. S'il n'y a rien eu à committer (l'agent a passé tout son budget à explorer sans produire de diff) : retry immédiat avec un sprint frais sur la même branche, plafonné par `MAX_RETRY_COUNT` (même mécanisme que les rate-limits) avant d'escalader en `needs-human`.
+
 ## CI
 
 `.github/workflows/ci.yml` relance lint + test sur chaque PR, indépendamment des agents. Un check obligatoire (branch protection sur `main`, check `lint-and-test`, `enforce_admins: true`) empêche le merge si CI échoue, même en cliquant le bouton sur GitHub — le gate le plus robuste des trois (hook local Husky contournable avec `--no-verify`, review d'agent contournable en théorie, CI+branch protection non contournable par un contributeur standard).

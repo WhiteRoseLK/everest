@@ -56,6 +56,8 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_VIEW;
     delete process.env.FAKE_CLAUDE_RATE_LIMITED;
+    delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED;
+    delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP;
     delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
@@ -197,5 +199,57 @@ describe('runLoop end-to-end', () => {
     await runLoop(config, workDir, 2);
 
     expect(existsSync(prMarker)).toBe(true);
+  });
+
+  it('checkpoints WIP progress and hands off to review when the sprint budget is exhausted', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // The budget guardrail is on the sprint, not the issue: hitting it should not abandon the
+    // issue - the harness commits the uncommitted "wip-file.txt" as a checkpoint, pushes, opens
+    // a PR, and hands off to the normal review loop instead of giving up.
+    await runLoop(config, workDir, 1);
+
+    expect(existsSync(prMarker)).toBe(true);
+
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('WIP checkpoint');
+  });
+
+  it('retries with a fresh sprint when the budget is exhausted with nothing to checkpoint', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // Nothing to checkpoint yet, so no PR - just a saved retry state for the next sprint.
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
   });
 });

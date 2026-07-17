@@ -215,6 +215,29 @@ export async function currentCommit(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * Commits any uncommitted changes as a checkpoint (harness-authored, not gated by the quality
+ * hooks that apply to agent commits - it's explicitly WIP, not a finished unit of work), so
+ * progress survives a budget-exhausted sprint instead of being discarded. Returns whether there
+ * was anything to commit.
+ */
+export async function commitWorkInProgress(cwd: string, message: string): Promise<boolean> {
+  // Excludes .harness/ (runtime state) via pathspec rather than relying solely on .gitignore -
+  // otherwise a missing/misconfigured .gitignore would make the harness "checkpoint" its own
+  // state.json as if it were agent work.
+  const { stdout } = await execFileAsync(
+    'git',
+    ['status', '--porcelain', '--', '.', ':!.harness'],
+    { cwd },
+  );
+  if (stdout.trim() === '') return false;
+
+  await setGitIdentity('everest-harness', 'harness@everest.local', cwd);
+  await execFileAsync('git', ['add', '-A', '--', '.', ':!.harness'], { cwd });
+  await execFileAsync('git', ['commit', '-m', message], { cwd });
+  return true;
+}
+
 /** Pushes the branch to `origin`, done by the harness itself rather than the agent. */
 export async function pushBranch(branch: string, cwd: string): Promise<void> {
   await execFileAsync('git', ['push', '-u', 'origin', branch], { cwd });
