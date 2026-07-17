@@ -56,6 +56,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_VIEW;
     delete process.env.FAKE_CLAUDE_RATE_LIMITED;
+    delete process.env.FAKE_GH_ISSUE_LIST;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -69,6 +70,7 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
       maxRetryCount: 10,
+      maxParallelIssues: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -130,6 +132,7 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
       maxRetryCount: 10,
+      maxParallelIssues: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -158,6 +161,7 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 2,
+      maxParallelIssues: 1,
     };
 
     // maxRetryCount = 2 means 3 total attempts (retryCount goes 1, 2, 3) before giving up;
@@ -173,5 +177,49 @@ describe('runLoop end-to-end', () => {
 
     const statePath = join(workDir, '.harness/state.json');
     expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('processes multiple independent issues concurrently, each in its own worktree', async () => {
+    process.env.FAKE_GH_ISSUE_LIST = JSON.stringify([
+      { number: 1, title: 'Test issue', labels: [], createdAt: '2024-01-01T00:00:00Z' },
+      { number: 2, title: 'Second issue', labels: [], createdAt: '2024-01-02T00:00:00Z' },
+    ]);
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 100,
+      baseRetryDelayMs: 100,
+      maxRetryDelayMs: 1000,
+      maxRetryCount: 10,
+      maxParallelIssues: 2,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // Both issues got their own branch, pushed and PR'd.
+    const branches = execFileSync('git', ['branch', '-a'], { cwd: originDir, encoding: 'utf-8' });
+    expect(branches).toContain('harness/issue-1-test-issue');
+    expect(branches).toContain('harness/issue-2-second-issue');
+
+    const prArgs = readFileSync(prMarker, 'utf-8');
+    expect(prArgs).toContain('Test issue');
+    expect(prArgs).toContain('Second issue');
+
+    // The primary checkout is left on main, untouched by either worktree's branch.
+    const currentBranch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    }).trim();
+    expect(currentBranch).toBe('main');
+
+    // Worktrees are cleaned up once their issue is done: only the primary checkout remains.
+    const worktrees = execFileSync('git', ['worktree', 'list'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(worktrees.trim().split('\n')).toHaveLength(1);
   });
 });

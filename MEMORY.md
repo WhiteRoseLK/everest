@@ -31,3 +31,15 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   précédent). Les labels `type:bug/type:feature/type:tech-debt` sont volontairement ignorés par
   le tri — purement informatifs, pas de scoring RICE/WSJF pour l'instant (sur-ingénierie évitée
   explicitement dans l'issue).
+- 2026-07-17 (issue #15) : parallélisation via git worktrees ajoutée derrière `MAX_PARALLEL_ISSUES`
+  (défaut 1, comportement séquentiel inchangé — opt-in). Deux pièges rencontrés : (1) `spawnSync`
+  (utilisé pour invoquer `claude`) bloque tout le process Node, donc plusieurs invocations
+  lancées via `Promise.all` ne tournaient PAS réellement en parallèle tant que `claude.ts`
+  n'était pas passé à `spawn` async — sans ce changement, une "parallélisation" au niveau du code
+  n'accélère rien. (2) l'identité git (`user.name`/`email`) reste un config repo-local partagé
+  entre worktrees (pas de `--worktree` scoping mis en place, jugé hors scope) : risque mineur de
+  mauvaise attribution d'auteur si deux agents commitent au même instant, accepté comme
+  limitation connue (metadata seulement, pas le code produit). (3) dans les fixtures bash de test
+  (`test/fixtures/fake-bin/gh`), un JSON par défaut dans `${VAR:-...}` avec des `}` non échappés
+  casse le comptage d'accolades de bash — utiliser un `if [ -n "$VAR" ]` explicite plutôt qu'un
+  défaut inline pour du JSON.

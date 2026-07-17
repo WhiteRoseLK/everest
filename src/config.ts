@@ -9,6 +9,7 @@ export interface Config {
   baseRetryDelayMs: number;
   maxRetryDelayMs: number;
   maxRetryCount: number;
+  maxParallelIssues: number;
 }
 
 function required(name: string): string {
@@ -33,5 +34,11 @@ export function loadConfig(): Config {
     baseRetryDelayMs: numberEnv('BASE_RETRY_DELAY_MS', 60_000),
     maxRetryDelayMs: numberEnv('MAX_RETRY_DELAY_MS', 3_600_000),
     maxRetryCount: numberEnv('MAX_RETRY_COUNT', 10),
+    // Defaults to 1 (strictly sequential, identical to the harness's original behavior): the
+    // launch budget for concurrent issues, each processed in its own git worktree (see
+    // src/worktree.ts). Deliberately opt-in rather than on-by-default - see issue #15, which
+    // explicitly cautions against building this out unless sequential throughput is a real
+    // bottleneck.
+    maxParallelIssues: numberEnv('MAX_PARALLEL_ISSUES', 1),
   };
 }

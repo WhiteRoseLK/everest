@@ -19,3 +19,4 @@ npm start
 - `src/config.ts` — lecture/validation `.env`
 - `src/prompt.ts` — construction du prompt + instructions QA E2E
 - `src/cost.ts` — journal disque (`.harness/cost-log.jsonl`) du coût token (`total_cost_usd`) de chaque invocation, pour mesurer avant d'envisager une compression de contexte (voir issue #13)
+- `src/worktree.ts` — création/suppression de git worktrees isolés, utilisés quand `MAX_PARALLEL_ISSUES > 1` pour traiter plusieurs issues en parallèle (voir issue #15)
