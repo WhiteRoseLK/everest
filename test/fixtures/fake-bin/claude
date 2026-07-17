@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ORIGINAL_ARGS="$*"
+
 AGENT=""
 while [ $# -gt 0 ]; do
   if [ "$1" = "--agent" ]; then
@@ -8,6 +10,11 @@ while [ $# -gt 0 ]; do
   fi
   shift
 done
+
+if [ "$AGENT" = "chat" ]; then
+  echo "$ORIGINAL_ARGS" > /tmp/fake-chat-invoked.marker
+  exit "${FAKE_CLAUDE_CHAT_EXIT_CODE:-0}"
+fi
 
 if [ "$AGENT" = "code-reviewer" ]; then
   echo "fake code-reviewer invoked" > /tmp/fake-code-reviewer-invoked.marker
