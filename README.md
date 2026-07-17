@@ -24,13 +24,16 @@ node bin/everest.js blockers                                                 # P
 node bin/everest.js watch [--interval <ms>]                                  # poll continu (façon `watch`) des blockers/needs-fixup
 ```
 
-`chat` (et l'invocation nue `everest` sans sous-commande) ouvre une session `claude` interactive
-avec l'agent `chat` (`.claude/agents/chat.md`) plutôt qu'une commande one-shot : on y pose des
-questions en langage naturel sur l'état du projet (équivalent de `status`/`blockers`) ou on
-demande de créer une issue (équivalent de `ask`), l'agent s'appuie sur `gh` pour y répondre.
-Contrairement à `issue-worker`/`code-reviewer`, ce n'est pas headless (pas de `-p`,
-pas de `bypassPermissions`) : un humain est au clavier, donc l'approbation des tool calls se fait
-normalement, de façon interactive - la même expérience que Claude Code utilisé directement.
+`chat` (et l'invocation nue `everest` sans sous-commande) démarre (ou réutilise, si déjà lancé)
+le conteneur Docker Compose `harness` puis y ouvre une session `claude` interactive (`docker
+compose exec -it`) avec l'agent `chat` (`.claude/agents/chat.md`) plutôt qu'une commande one-shot :
+on y pose des questions en langage naturel sur l'état du projet (équivalent de `status`/
+`blockers`) ou on demande de créer une issue (équivalent de `ask`), l'agent s'appuie sur `gh` pour
+y répondre. Contrairement à l'ancien design, cette session tourne désormais avec
+`--permission-mode bypassPermissions` (comme `issue-worker`/`code-reviewer`) : les tool calls
+s'exécutent sans prompt d'approbation, ce qui n'est devenu acceptable qu'en confinant la session
+dans le sandbox Docker (voir "Known Pitfalls" dans CLAUDE.md) plutôt qu'en l'exécutant directement
+sur l'hôte. Nécessite donc `docker`/`docker compose` disponibles localement, en plus de `gh`.
 
 `watch` réaffiche périodiquement (intervalle `--interval`, défaut `WATCH_POLL_INTERVAL_MS`,
 30s) les PR labellisées `needs-human` (avec leur dernier commentaire) et celles encore en boucle

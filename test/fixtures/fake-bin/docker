@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fakes just enough of `docker compose` for `runChat` (src/cli.ts) to be testable without a real
+# Docker daemon: `docker compose up -d harness` (ensureHarnessContainer) and
+# `docker compose exec -it harness claude ...` (the actual chat invocation, delegated to the fake
+# `claude` script already on PATH so its own marker/exit-code behavior keeps working unchanged).
+
+if [ "${1:-}" = "compose" ] && [ "${2:-}" = "up" ]; then
+  echo "fake docker compose up invoked: $*" > /tmp/fake-docker-compose-up.marker
+  if [ -n "${FAKE_DOCKER_COMPOSE_UP_EXIT_CODE:-}" ]; then
+    exit "$FAKE_DOCKER_COMPOSE_UP_EXIT_CODE"
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "compose" ] && [ "${2:-}" = "exec" ]; then
+  # Strip everything up to and including the `claude` token (flags like `-it`, the service name
+  # `harness`, etc.) and hand the rest off to the fake `claude` binary, mirroring how a real
+  # `docker compose exec -it harness claude ...` runs `claude` inside the container.
+  while [ $# -gt 0 ] && [ "$1" != "claude" ]; do
+    shift
+  done
+  shift || true
+  exec "$(dirname "$0")/claude" "$@"
+fi
+
+echo "fake docker: unrecognized command: $*" >&2
+exit 1

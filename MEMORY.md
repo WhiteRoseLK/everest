@@ -48,6 +48,13 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   ajouter un bloc `languageOptions.globals` dédié dans `eslint.config.js` pour ce chemin (voir le
   bloc `files: ['bin/**/*.js']`).
 
+- 2026-07-17 (issue #33) : pour tester un `spawnSync('docker', ['compose', 'exec', ...])` sans
+  Docker réel, le fake binaire `test/fixtures/fake-bin/docker` strippe les args jusqu'au token
+  `claude` puis `exec`-délègue au fake `claude` déjà sur le `PATH` - évite de dupliquer toute la
+  logique de simulation (markers, `FAKE_CLAUDE_CHAT_EXIT_CODE`, etc.) déjà écrite dans le fake
+  `claude`. Pattern réutilisable pour tout futur wrapper qui invoque une commande via un niveau
+  d'indirection supplémentaire (ici `docker compose exec` autour de `claude`).
+
 - 2026-07-17 (issue #26 / PR #28) : tout poll loop de longue durée destiné à tourner sans
   supervision (`runLoop` dans `src/loop.ts`, `runWatch` dans `src/cli.ts`) doit isoler chaque
   itération dans son propre try/catch (log + continue) plutôt que laisser une erreur `gh`

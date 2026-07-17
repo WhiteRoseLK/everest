@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { main, runWatch, runChat } from '../src/cli.js';
 
 const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
+const DOCKER_COMPOSE_UP_MARKER = '/tmp/fake-docker-compose-up.marker';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
@@ -35,7 +36,9 @@ describe('everest CLI end-to-end', () => {
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
     delete process.env.FAKE_GH_PR_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_CHAT_EXIT_CODE;
+    delete process.env.FAKE_DOCKER_COMPOSE_UP_EXIT_CODE;
     rmSync(CHAT_MARKER, { force: true });
+    rmSync(DOCKER_COMPOSE_UP_MARKER, { force: true });
     logSpy.mockRestore();
     errorSpy.mockRestore();
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -54,13 +57,19 @@ describe('everest CLI end-to-end', () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Issue created'));
   });
 
-  it('chat opens an interactive claude session scoped to the configured repo', () => {
+  it('chat starts/reuses the harness Docker container and runs claude inside it', () => {
     const status = runChat('fake/repo');
 
     expect(status).toBe(0);
+    // The harness container was started (or reused) before the interactive session ran.
+    expect(existsSync(DOCKER_COMPOSE_UP_MARKER)).toBe(true);
+    expect(readFileSync(DOCKER_COMPOSE_UP_MARKER, 'utf-8')).toContain('compose up -d harness');
+    // The `claude` invocation itself happened inside the container (`docker compose exec -it
+    // harness claude ...`), with bypassPermissions now safe to use since it's sandboxed there.
     expect(existsSync(CHAT_MARKER)).toBe(true);
     const args = readFileSync(CHAT_MARKER, 'utf-8');
     expect(args).toContain('--agent chat');
+    expect(args).toContain('--permission-mode bypassPermissions');
     expect(args).toContain('fake/repo');
   });
 
@@ -70,6 +79,14 @@ describe('everest CLI end-to-end', () => {
     const status = runChat('fake/repo');
 
     expect(status).toBe(3);
+  });
+
+  it('chat fails fast if the harness container fails to start', () => {
+    process.env.FAKE_DOCKER_COMPOSE_UP_EXIT_CODE = '1';
+
+    expect(() => runChat('fake/repo')).toThrow(/Failed to start the harness Docker container/);
+    // Since the container never came up, claude inside it must never have been invoked.
+    expect(existsSync(CHAT_MARKER)).toBe(false);
   });
 
   it('bare `everest` (no subcommand) opens chat the same as `everest chat`', async () => {
