@@ -21,7 +21,9 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   if [ -n "${FAKE_GH_PR_VIEW:-}" ]; then
     echo "$FAKE_GH_PR_VIEW"
   else
-    echo '{"reviewDecision":"APPROVED"}'
+    # Mirrors real code-reviewer behavior: it merges directly (self-approve is impossible on
+    # GitHub), so reviewDecision stays null but the PR state becomes MERGED.
+    echo '{"reviewDecision":null,"state":"MERGED"}'
   fi
   exit 0
 fi

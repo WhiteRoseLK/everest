@@ -10,11 +10,13 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 ## Review Loop
 
-Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, puis statue réellement avec `gh pr review --approve` ou `--request-changes`. C'est un vrai gate, pas juste un commentaire consultatif.
+Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, vérifie que le check CI `lint-and-test` est vert, puis décide.
 
-Si `--request-changes` : le harnais rappelle `issue-worker` sur la même branche avec le retour du reviewer en contexte (`buildFixupPrompt`), repousse le commit, puis relance `code-reviewer`. Ce cycle se répète jusqu'à approbation ou jusqu'à `MAX_REVIEW_CYCLES` (défaut 3, `runReviewLoop` dans `src/loop.ts`) — budget de lancement pour éviter une boucle infinie si l'agent et le reviewer n'arrivent jamais à s'accorder. Au-delà, un commentaire est posté sur l'issue pour signaler qu'une intervention humaine est nécessaire.
+`gh pr review --approve` échoue sur sa propre PR ("Can not approve your own pull request" — PR et review partagent le même compte `GH_TOKEN`). Le reviewer ne l'utilise donc pas : s'il juge la PR prête, il **merge directement** (`gh pr merge --squash --delete-branch`). S'il juge que ce n'est pas prêt, il utilise `gh pr review --request-changes` (ça, ça marche sur sa propre PR — seule l'approbation formelle est bloquée).
 
-Le merge lui-même reste toujours un geste humain, y compris après approbation du reviewer — voir Code Review ci-dessous.
+Si `--request-changes` : le harnais rappelle `issue-worker` sur la même branche avec le retour du reviewer en contexte (`buildFixupPrompt`), repousse le commit, puis relance `code-reviewer`. Ce cycle se répète jusqu'au merge ou jusqu'à `MAX_REVIEW_CYCLES` (défaut 3, `runReviewLoop` dans `src/loop.ts`) — budget de lancement pour éviter une boucle infinie si l'agent et le reviewer n'arrivent jamais à s'accorder. Au-delà, un commentaire est posté sur l'issue pour signaler qu'une intervention humaine est nécessaire. Le harnais détecte la fin du cycle via `getPullRequestState()` (état `MERGED`), pas seulement via `reviewDecision` (qui reste `null` sur un merge direct, faute d'approve formel possible).
+
+Avant de créer une nouvelle branche pour l'issue suivante, le harnais fait `checkoutMain()` (checkout + `pull --ff-only`) plutôt que de partir de la branche précédente — sinon une branche mergée-et-supprimée côté remote laisserait le prochain `git checkout -b` partir d'un historique obsolète (bug auto-repéré par le harnais, issue #17).
 
 ## CI
 
@@ -40,9 +42,12 @@ Note : la branch protection classique et les rulesets GitHub ne sont pas disponi
 
 ## Code Review
 
-- Le harnais n'a pas le droit de merger ses propres PR, même une fois approuvée par `code-reviewer` : `openPullRequest()` ouvre la PR, `runReviewLoop()` fait itérer issue-worker/code-reviewer jusqu'à approbation, mais cliquer sur merge reste un geste humain.
-- `code-reviewer` est le gardien de `main` : il doit vérifier activement (lancer les tests lui-même), pas se contenter de lire le diff, et n'a pas peur de bloquer (`--request-changes`) tant que ce n'est pas prêt.
-- Ne jamais ajouter de merge automatique/auto-merge à `src/github.ts` sans que ce soit explicitement demandé.
+**Politique changée le 17 juillet 2026, décision explicite de l'utilisatrice** : le produit doit être autonome — deux agents distincts, l'un développe (`issue-worker`), l'autre valide et merge (`code-reviewer`). Ce n'est plus "le merge reste un geste humain" (ancienne règle, ne plus l'appliquer).
+
+- `code-reviewer` est le seul décideur de ce qui atteint `main`. Il merge lui-même (`gh pr merge`) une fois que **toutes** les conditions sont réunies : CI verte (`statusCheckRollup`), `npm run lint`/`npm test` verts en local sur son propre run (pas de confiance aveugle dans le diff), pas de bug de correctness/sécurité non traité, tests E2E présents, doc à jour si le changement le justifie.
+- S'il manque une seule de ces conditions : `--request-changes`, jamais de merge "en attendant".
+- `src/loop.ts` ne merge jamais lui-même — il ne fait qu'invoquer `code-reviewer` et lire l'état de la PR après coup (`getPullRequestState`). Toute la décision de merge vit dans l'agent, pas dans le code TypeScript du harnais.
+- Le seul gate qui reste réellement indépendant des agents est CI + branch protection (`enforce_admins: true`) : même `code-reviewer` ne peut pas merger si le check `lint-and-test` échoue.
 
 ## Code Style
 
