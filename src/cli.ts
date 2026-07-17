@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { loadConfig } from './config.js';
 import {
   createIssue,
@@ -16,6 +17,8 @@ function printUsage(): void {
   console.log(
     [
       'Usage:',
+      '  everest                                          (same as `everest chat`)',
+      '  everest chat',
       '  everest ask "<message>" [--priority <critical|high|medium|low>]',
       '  everest status',
       '  everest blockers',
@@ -150,6 +153,39 @@ export async function runWatch(
   }
 }
 
+/**
+ * Handles `everest chat` (and bare `everest`): opens an interactive `claude` session using the
+ * `chat` agent (`.claude/agents/chat.md`), so a human can converse with everest in natural
+ * language instead of memorizing one-shot subcommands - the same interactive experience as using
+ * Claude Code directly, just pointed at this repo's GitHub state (open PRs, blockers, filing
+ * issues) via `gh`.
+ *
+ * Deliberately not headless (`-p`): unlike `issue-worker`/`code-reviewer`, which run unsupervised
+ * inside the Docker sandbox and need `bypassPermissions`, `everest chat` is invoked directly by a
+ * human sitting at the terminal, so tool-call approval works the normal interactive way (no
+ * `bypassPermissions` needed or wanted here - see "Known Pitfalls" in CLAUDE.md on why headless
+ * mode and blanket permission bypass are treated as a package deal confined to the sandbox).
+ */
+export function runChat(repo: string): number {
+  const systemPromptAppend =
+    `You are "everest chat", the conversational interface for the everest harness in ` +
+    `repository ${repo}. Use the gh CLI (already authenticated, scoped to --repo ${repo}) to ` +
+    `answer questions about harness status (open PRs, review-loop state), blockers (PRs ` +
+    `labeled needs-human), and to file new issues on the user's behalf when asked - mirroring ` +
+    `'everest status', 'everest blockers' and 'everest ask'. Keep answers short and ` +
+    `terminal-friendly.`;
+
+  const result = spawnSync(
+    'claude',
+    ['--agent', 'chat', '--append-system-prompt', systemPromptAppend],
+    {
+      stdio: 'inherit',
+    },
+  );
+  if (result.error) throw result.error;
+  return result.status ?? 0;
+}
+
 /** Parses the optional `--interval <ms>` flag shared by watch-like subcommands. */
 function parseIntervalFlag(args: string[], fallback: number): number {
   const index = args.indexOf('--interval');
@@ -162,13 +198,15 @@ function parseIntervalFlag(args: string[], fallback: number): number {
 }
 
 /**
- * Entry point for the `everest` CLI: dispatches to the `ask`/`status`/`blockers`/`watch`
+ * Entry point for the `everest` CLI: dispatches to the `chat`/`ask`/`status`/`blockers`/`watch`
  * subcommands so the harness can be operated directly instead of through hand-typed `gh`
- * commands.
+ * commands. Bare `everest` (no subcommand) opens the interactive chat session too - the CLI's
+ * default mode is conversational, one-shot subcommands are the shortcut, not the other way
+ * around.
  */
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
-  if (!command || command === '--help' || command === '-h') {
+  if (command === '--help' || command === '-h') {
     printUsage();
     return;
   }
@@ -176,6 +214,10 @@ export async function main(argv: string[]): Promise<void> {
   const config = loadConfig();
 
   switch (command) {
+    case undefined:
+    case 'chat':
+      process.exitCode = runChat(config.githubRepo);
+      break;
     case 'ask':
       await runAsk(rest, config.githubRepo);
       break;

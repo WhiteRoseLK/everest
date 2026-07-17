@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main, runWatch } from '../src/cli.js';
+import { main, runWatch, runChat } from '../src/cli.js';
+
+const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
@@ -32,6 +34,8 @@ describe('everest CLI end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN;
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
     delete process.env.FAKE_GH_PR_LIST_FAIL_ONCE;
+    delete process.env.FAKE_CLAUDE_CHAT_EXIT_CODE;
+    rmSync(CHAT_MARKER, { force: true });
     logSpy.mockRestore();
     errorSpy.mockRestore();
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -48,6 +52,30 @@ describe('everest CLI end-to-end', () => {
     expect(args).toContain('add dark mode');
     expect(args).toContain('priority:high');
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Issue created'));
+  });
+
+  it('chat opens an interactive claude session scoped to the configured repo', () => {
+    const status = runChat('fake/repo');
+
+    expect(status).toBe(0);
+    expect(existsSync(CHAT_MARKER)).toBe(true);
+    const args = readFileSync(CHAT_MARKER, 'utf-8');
+    expect(args).toContain('--agent chat');
+    expect(args).toContain('fake/repo');
+  });
+
+  it('chat propagates the exit code of the underlying claude process', () => {
+    process.env.FAKE_CLAUDE_CHAT_EXIT_CODE = '3';
+
+    const status = runChat('fake/repo');
+
+    expect(status).toBe(3);
+  });
+
+  it('bare `everest` (no subcommand) opens chat the same as `everest chat`', async () => {
+    await main([]);
+
+    expect(existsSync(CHAT_MARKER)).toBe(true);
   });
 
   it('status lists open harness PRs with their derived state and recently closed issues', async () => {
