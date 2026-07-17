@@ -84,6 +84,16 @@ export async function hasOpenPullRequest(repo: string, branch: string): Promise<
 /** Label applied to a harness PR once it has exhausted its review cycles without approval, so it's not picked up again for automatic resumption until a human intervenes. */
 export const NEEDS_HUMAN_LABEL = 'needs-human';
 
+/**
+ * Label code-reviewer applies to signal "not ready, issue-worker needs to address my findings".
+ *
+ * Not `gh pr review --request-changes`: GitHub rejects that too on your own PR ("Can not
+ * request changes on your own pull request"), the same restriction that blocks `--approve`.
+ * Only plain comments are allowed on your own PR, so a label is the actual machine-readable
+ * signal - the review findings themselves are still posted as a PR comment for a human to read.
+ */
+export const NEEDS_FIXUP_LABEL = 'needs-fixup';
+
 const HARNESS_BRANCH_ISSUE_PATTERN = /^harness\/issue-(\d+)-/;
 
 export interface ResumablePullRequest {
@@ -92,9 +102,9 @@ export interface ResumablePullRequest {
 }
 
 /**
- * Finds an open harness PR (branch prefixed `harness/`) whose review was left with
- * `CHANGES_REQUESTED`, so the harness can resume its review loop on restart instead of leaving
- * it stuck. PRs already labeled {@link NEEDS_HUMAN_LABEL} (review budget exhausted) are skipped.
+ * Finds an open harness PR (branch prefixed `harness/`) labeled {@link NEEDS_FIXUP_LABEL}, so
+ * the harness can resume its review loop on restart instead of leaving it stuck. PRs already
+ * labeled {@link NEEDS_HUMAN_LABEL} (review budget exhausted) are skipped.
  */
 export async function findResumablePullRequest(repo: string): Promise<ResumablePullRequest | null> {
   const { stdout } = await execFileAsync('gh', [
@@ -105,17 +115,17 @@ export async function findResumablePullRequest(repo: string): Promise<ResumableP
     '--state',
     'open',
     '--json',
-    'headRefName,reviewDecision,labels',
+    'headRefName,labels',
   ]);
   const prs = JSON.parse(stdout) as Array<{
     headRefName: string;
-    reviewDecision: string | null;
     labels: Array<{ name: string }>;
   }>;
 
   for (const pr of prs) {
-    if (pr.reviewDecision !== 'CHANGES_REQUESTED') continue;
-    if (pr.labels.some((label) => label.name === NEEDS_HUMAN_LABEL)) continue;
+    const labelNames = pr.labels.map((label) => label.name);
+    if (!labelNames.includes(NEEDS_FIXUP_LABEL)) continue;
+    if (labelNames.includes(NEEDS_HUMAN_LABEL)) continue;
     const match = HARNESS_BRANCH_ISSUE_PATTERN.exec(pr.headRefName);
     if (!match) continue;
     return { branch: pr.headRefName, issueNumber: Number(match[1]) };
@@ -123,32 +133,55 @@ export async function findResumablePullRequest(repo: string): Promise<ResumableP
   return null;
 }
 
-/**
- * Labels a PR as needing human attention (creating the label first if it doesn't exist yet),
- * used once the review loop has exhausted its cycle budget without reaching approval.
- */
-export async function markPullRequestNeedsHuman(repo: string, branch: string): Promise<void> {
+/** Creates `label` on `repo` if it doesn't exist yet, then adds it to the PR for `branch`. */
+async function addLabel(
+  repo: string,
+  branch: string,
+  label: string,
+  color: string,
+  description: string,
+): Promise<void> {
   await execFileAsync('gh', [
     'label',
     'create',
-    NEEDS_HUMAN_LABEL,
+    label,
     '--repo',
     repo,
     '--color',
-    'B60205',
+    color,
     '--description',
-    'Needs human intervention, the harness could not resolve this automatically.',
+    description,
     '--force',
   ]);
-  await execFileAsync('gh', [
-    'pr',
-    'edit',
-    branch,
-    '--repo',
+  await execFileAsync('gh', ['pr', 'edit', branch, '--repo', repo, '--add-label', label]);
+}
+
+/**
+ * Labels a PR as needing a fixup pass from issue-worker, used by code-reviewer in place of
+ * `gh pr review --request-changes` (blocked on your own PR - see {@link NEEDS_FIXUP_LABEL}).
+ */
+export async function markPullRequestNeedsFixup(repo: string, branch: string): Promise<void> {
+  await addLabel(
     repo,
-    '--add-label',
+    branch,
+    NEEDS_FIXUP_LABEL,
+    'D93F0B',
+    'code-reviewer requested changes; issue-worker should address them.',
+  );
+}
+
+/**
+ * Labels a PR as needing human attention, used once the review loop has exhausted its cycle
+ * budget without reaching approval.
+ */
+export async function markPullRequestNeedsHuman(repo: string, branch: string): Promise<void> {
+  await addLabel(
+    repo,
+    branch,
     NEEDS_HUMAN_LABEL,
-  ]);
+    'B60205',
+    'Needs human intervention, the harness could not resolve this automatically.',
+  );
 }
 
 /**
@@ -213,10 +246,12 @@ export async function openPullRequest(
   return stdout.trim();
 }
 
-export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
-
-/** Reads the PR's current review decision, used to drive the issue-worker/code-reviewer loop. */
-export async function getReviewDecision(repo: string, branch: string): Promise<ReviewDecision> {
+/**
+ * Reads the PR's current labels. Used to check for {@link NEEDS_FIXUP_LABEL} - GitHub's
+ * `reviewDecision` can't be used for this since `gh pr review` (approve or request-changes)
+ * both fail on your own PR, so `reviewDecision` never becomes `CHANGES_REQUESTED` here.
+ */
+export async function getPullRequestLabels(repo: string, branch: string): Promise<string[]> {
   const { stdout } = await execFileAsync('gh', [
     'pr',
     'view',
@@ -224,10 +259,10 @@ export async function getReviewDecision(repo: string, branch: string): Promise<R
     '--repo',
     repo,
     '--json',
-    'reviewDecision',
+    'labels',
   ]);
-  const { reviewDecision } = JSON.parse(stdout) as { reviewDecision: string | null };
-  return (reviewDecision as ReviewDecision) || null;
+  const { labels } = JSON.parse(stdout) as { labels: Array<{ name: string }> };
+  return labels.map((label) => label.name);
 }
 
 export type PullRequestState = 'OPEN' | 'MERGED' | 'CLOSED';

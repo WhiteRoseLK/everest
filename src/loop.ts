@@ -9,8 +9,9 @@ import {
   openPullRequest,
   commentOnIssue,
   hasOpenPullRequest,
-  getReviewDecision,
   getPullRequestState,
+  getPullRequestLabels,
+  NEEDS_FIXUP_LABEL,
   findResumablePullRequest,
   markPullRequestNeedsHuman,
   type Issue,
@@ -68,9 +69,10 @@ async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise
 /**
  * Runs code-reviewer against the branch. code-reviewer merges directly once it decides a PR is
  * ready (see .claude/agents/code-reviewer.md - it can't formally --approve its own PR, so it
- * merges instead of relying on a review decision). If it requests changes instead, this
- * re-invokes issue-worker with the feedback and re-reviews - repeating until merged or
- * `maxReviewCycles` is reached (a launch budget, so a stuck disagreement can't loop forever).
+ * merges instead). If it's not ready, code-reviewer applies {@link NEEDS_FIXUP_LABEL} (not
+ * `gh pr review --request-changes`, which also fails on your own PR); this re-invokes
+ * issue-worker with the feedback and re-reviews - repeating until merged or `maxReviewCycles`
+ * is reached (a launch budget, so a stuck disagreement can't loop forever).
  */
 async function runReviewLoop(
   issue: Issue,
@@ -91,10 +93,10 @@ async function runReviewLoop(
       return;
     }
 
-    const decision = await getReviewDecision(config.githubRepo, branch);
-    if (decision !== 'CHANGES_REQUESTED') {
+    const labels = await getPullRequestLabels(config.githubRepo, branch);
+    if (!labels.includes(NEEDS_FIXUP_LABEL)) {
       console.log(
-        `PR for issue #${issue.number} not merged yet (state: ${prState}, decision: ${decision ?? 'none'})`,
+        `PR for issue #${issue.number} not merged yet (state: ${prState}, no fixup requested)`,
       );
       return;
     }
@@ -199,8 +201,8 @@ async function handleIssue(
 }
 
 /**
- * Resumes the review loop on an already-open harness PR left with `CHANGES_REQUESTED`, e.g.
- * because the harness stopped between opening the PR and it getting approved. Returns whether
+ * Resumes the review loop on an already-open harness PR labeled {@link NEEDS_FIXUP_LABEL}, e.g.
+ * because the harness stopped between opening the PR and it getting merged. Returns whether
  * a PR was found and resumed, so the caller can skip picking a new issue this iteration.
  */
 async function resumePendingReview(config: Config, cwd: string): Promise<boolean> {

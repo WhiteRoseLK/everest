@@ -90,7 +90,7 @@ describe('runLoop end-to-end', () => {
     );
   });
 
-  it('resumes the review loop for an already-open PR left with CHANGES_REQUESTED', async () => {
+  it('resumes the review loop for an already-open PR labeled needs-fixup', async () => {
     const reviewerMarker = '/tmp/fake-code-reviewer-invoked.marker';
     rmSync(reviewerMarker, { force: true });
 
@@ -116,11 +116,11 @@ describe('runLoop end-to-end', () => {
     process.env.FAKE_GH_PR_LIST = JSON.stringify([
       {
         headRefName: 'harness/issue-1-test-issue',
-        reviewDecision: 'CHANGES_REQUESTED',
-        labels: [],
+        labels: [{ name: 'needs-fixup' }],
       },
     ]);
-    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ reviewDecision: 'APPROVED' });
+    // Simulates code-reviewer deciding to merge on this resumed pass.
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ state: 'MERGED', labels: [] });
 
     const config: Config = {
       githubRepo: 'fake/repo',
@@ -135,7 +135,7 @@ describe('runLoop end-to-end', () => {
 
     await runLoop(config, workDir, 1);
 
-    // The resumed review loop invoked code-reviewer, saw it's now approved, and did not
+    // The resumed review loop invoked code-reviewer, saw it's now merged, and did not
     // recreate the PR (openPullRequest is only called from the fresh-issue path).
     expect(existsSync(reviewerMarker)).toBe(true);
     expect(existsSync(prMarker)).toBe(false);
