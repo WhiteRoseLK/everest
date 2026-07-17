@@ -29,6 +29,18 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Plain-JS launcher script (see bin/everest.js): not covered by tseslint's recommended
+    // config, which only targets `**/*.ts` and disables `no-undef` there because the TS compiler
+    // already checks it - Node globals need to be declared explicitly here instead.
+    files: ['bin/**/*.js'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
   { ignores: ['dist/', 'node_modules/', 'test/fixtures/'] },
   prettierConfig,
 );

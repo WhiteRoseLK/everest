@@ -4,6 +4,9 @@
   "description": "Harnais léger d'orchestration Claude Code pour auto-amélioration continue",
   "private": true,
   "type": "module",
+  "bin": {
+    "everest": "./bin/everest.js"
+  },
   "scripts": {
     "start": "tsx src/index.ts",
     "test": "vitest run",
