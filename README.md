@@ -18,3 +18,4 @@ npm start
 - `src/state.ts` — checkpoint disque (reprise après rate-limit)
 - `src/config.ts` — lecture/validation `.env`
 - `src/prompt.ts` — construction du prompt + instructions QA E2E
+- `src/cost.ts` — journal disque (`.harness/cost-log.jsonl`) du coût token (`total_cost_usd`) de chaque invocation, pour mesurer avant d'envisager une compression de contexte (voir issue #13)

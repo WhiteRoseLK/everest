@@ -11,6 +11,8 @@ import {
   hasOpenPullRequest,
   getReviewDecision,
   getPullRequestState,
+  findResumablePullRequest,
+  markPullRequestNeedsHuman,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -19,18 +21,33 @@ import { buildPrompt, buildFixupPrompt } from './prompt.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const HIGH_PRIORITY_LABEL = 'priority:high';
+/**
+ * Priority tiers, ranked from most to least urgent. An issue's rank is the lowest (most urgent)
+ * index among the priority labels it carries. Issues without any of these labels fall back to
+ * the `priority:medium` rank, matching the old behavior where unlabeled issues sat below
+ * `priority:high` in FIFO order.
+ */
+const PRIORITY_TIERS = ['priority:critical', 'priority:high', 'priority:medium', 'priority:low'];
+
+const DEFAULT_PRIORITY_RANK = PRIORITY_TIERS.indexOf('priority:medium');
+
+/** Returns the priority rank of an issue (lower is more urgent); see {@link PRIORITY_TIERS}. */
+function priorityRank(issue: Issue): number {
+  const ranks = issue.labels
+    .map((label) => PRIORITY_TIERS.indexOf(label))
+    .filter((rank) => rank !== -1);
+  return ranks.length > 0 ? Math.min(...ranks) : DEFAULT_PRIORITY_RANK;
+}
 
 /**
- * Selects the next issue to process: issues labeled `priority:high` come first,
- * regardless of creation date. Within each priority tier, issues are ordered
- * oldest first (FIFO).
+ * Selects the next issue to process: issues are ordered by priority tier (see
+ * {@link PRIORITY_TIERS}, most urgent first), then oldest first (FIFO) within each tier.
  */
 export function pickNextIssue(issues: Issue[]): Issue | null {
   if (issues.length === 0) return null;
   return [...issues].sort((a, b) => {
-    const aPriority = a.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
-    const bPriority = b.labels.includes(HIGH_PRIORITY_LABEL) ? 0 : 1;
+    const aPriority = priorityRank(a);
+    const bPriority = priorityRank(b);
     if (aPriority !== bPriority) return aPriority - bPriority;
     return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   })[0];
@@ -85,7 +102,12 @@ async function runReviewLoop(
     console.log(
       `Review cycle ${cycle + 1}/${config.maxReviewCycles}: changes requested for issue #${issue.number}, re-invoking issue-worker`,
     );
-    const fixup = await runClaudeCode(buildFixupPrompt(branch), cwd, config.maxBudgetUsdPerIssue);
+    const fixup = await runClaudeCode(
+      buildFixupPrompt(branch, cwd),
+      cwd,
+      config.maxBudgetUsdPerIssue,
+      `issue-#${issue.number}-fixup`,
+    );
     if (!fixup.success) {
       console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
       return;
@@ -98,6 +120,7 @@ async function runReviewLoop(
     issue,
     `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
   );
+  await markPullRequestNeedsHuman(config.githubRepo, branch);
 }
 
 async function handleIssue(
@@ -125,13 +148,28 @@ async function handleIssue(
   }
 
   const result: ClaudeResult = await runClaudeCode(
-    buildPrompt(issue),
+    buildPrompt(issue, cwd),
     cwd,
     config.maxBudgetUsdPerIssue,
+    `issue-#${issue.number}`,
   );
 
   if (result.rateLimited) {
     retryCount += 1;
+
+    if (retryCount > config.maxRetryCount) {
+      console.log(
+        `Issue #${issue.number} hit the rate-limit retry cap (${config.maxRetryCount}), giving up`,
+      );
+      await commentOnIssue(
+        config.githubRepo,
+        issue,
+        `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
+      );
+      clearState(cwd);
+      return;
+    }
+
     const delay = Math.min(config.baseRetryDelayMs * 2 ** retryCount, config.maxRetryDelayMs);
     saveState(
       { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
@@ -160,20 +198,46 @@ async function handleIssue(
   clearState(cwd);
 }
 
+/**
+ * Resumes the review loop on an already-open harness PR left with `CHANGES_REQUESTED`, e.g.
+ * because the harness stopped between opening the PR and it getting approved. Returns whether
+ * a PR was found and resumed, so the caller can skip picking a new issue this iteration.
+ */
+async function resumePendingReview(config: Config, cwd: string): Promise<boolean> {
+  const resumable = await findResumablePullRequest(config.githubRepo);
+  if (!resumable) return false;
+
+  const issues = await listOpenIssues(config.githubRepo);
+  const issue = issues.find((candidate) => candidate.number === resumable.issueNumber) ?? null;
+  if (!issue) return false;
+
+  console.log(`Resuming review loop for issue #${issue.number} on branch ${resumable.branch}`);
+  await checkoutBranch(resumable.branch, cwd);
+  await runReviewLoop(issue, resumable.branch, config, cwd);
+  return true;
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(config: Config, cwd: string, iterations = Infinity): Promise<void> {
   for (let i = 0; i < iterations; i += 1) {
     const state = loadState(cwd);
 
-    let issue: Issue | null;
     if (state) {
       const issues = await listOpenIssues(config.githubRepo);
-      issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
-    } else {
-      const issues = await listOpenIssues(config.githubRepo);
-      const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
-      issue = pickNextIssue(candidates);
+      const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
+      if (!issue) {
+        await sleep(config.pollIntervalMs);
+        continue;
+      }
+      await handleIssue(issue, state, config, cwd);
+      continue;
     }
+
+    if (await resumePendingReview(config, cwd)) continue;
+
+    const issues = await listOpenIssues(config.githubRepo);
+    const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+    const issue: Issue | null = pickNextIssue(candidates);
 
     if (!issue) {
       await sleep(config.pollIntervalMs);

@@ -1,10 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { currentCommit, setGitIdentity } from './github.js';
+import { memorySection } from './prompt.js';
+import { recordCost } from './cost.js';
 
 export interface ClaudeResult {
   success: boolean;
   rateLimited: boolean;
   errorSummary?: string;
+  totalCostUsd?: number;
 }
 
 interface ClaudeJsonOutput {
@@ -74,13 +77,16 @@ export function shouldCheckRateLimit(parsed: ClaudeJsonOutput | undefined): bool
 /**
  * Runs a named subagent (defined in `.claude/agents/`) headlessly, after setting the git
  * identity matching that agent. Returns whether it completed without error or hit a rate limit;
- * callers add their own success criteria on top (e.g. "did it produce a commit").
+ * callers add their own success criteria on top (e.g. "did it produce a commit"). `label`
+ * identifies what this invocation was for (e.g. an issue number or branch) and is only used to
+ * tag the recorded cost entry (see `recordCost`).
  */
 async function runAgent(
   agentName: string,
   prompt: string,
   cwd: string,
   maxBudgetUsd: number,
+  label: string,
 ): Promise<ClaudeResult> {
   const identity = AGENT_IDENTITIES[agentName];
   await setGitIdentity(identity.name, identity.email, cwd);
@@ -119,9 +125,24 @@ async function runAgent(
     parsed = undefined;
   }
 
+  // Recorded regardless of success/failure/rate-limit: even a failed or rate-limited attempt
+  // can consume tokens, and this log is the measurement issue #13 requires before considering
+  // a context-compression tool like Headroom - it must reflect actual total spend.
+  if (typeof parsed?.total_cost_usd === 'number') {
+    recordCost(
+      {
+        timestamp: new Date().toISOString(),
+        agent: agentName,
+        label,
+        totalCostUsd: parsed.total_cost_usd,
+      },
+      cwd,
+    );
+  }
+
   if (shouldCheckRateLimit(parsed)) {
     if (isRateLimitError(parsed, proc.stderr ?? '')) {
-      return { success: false, rateLimited: true };
+      return { success: false, rateLimited: true, totalCostUsd: parsed?.total_cost_usd };
     }
 
     // The rate-limit heuristic in isRateLimitError() is undocumented and can miss real
@@ -137,24 +158,27 @@ async function runAgent(
       success: false,
       rateLimited: false,
       errorSummary: parsed?.errors?.join('; ') ?? proc.stderr ?? 'unknown error',
+      totalCostUsd: parsed?.total_cost_usd,
     };
   }
 
-  return { success: true, rateLimited: false };
+  return { success: true, rateLimited: false, totalCostUsd: parsed?.total_cost_usd };
 }
 
 /**
  * Runs the `issue-worker` subagent against one issue prompt and reports whether it produced a
- * new commit, hit a rate limit, or failed outright.
+ * new commit, hit a rate limit, or failed outright. `label` tags the recorded cost entry (see
+ * `recordCost`) - callers typically pass something identifying the issue, e.g. `issue-#42`.
  */
 export async function runClaudeCode(
   prompt: string,
   cwd: string,
   maxBudgetUsd: number,
+  label: string,
 ): Promise<ClaudeResult> {
   const commitBefore = await currentCommit(cwd);
 
-  const result = await runAgent('issue-worker', prompt, cwd, maxBudgetUsd);
+  const result = await runAgent('issue-worker', prompt, cwd, maxBudgetUsd, label);
   if (!result.success) return result;
 
   const commitAfter = await currentCommit(cwd);
@@ -164,6 +188,7 @@ export async function runClaudeCode(
     success: hasNewCommit,
     rateLimited: false,
     errorSummary: hasNewCommit ? undefined : 'no new commit produced',
+    totalCostUsd: result.totalCostUsd,
   };
 }
 
@@ -177,6 +202,6 @@ export async function runCodeReview(
   cwd: string,
   maxBudgetUsd: number,
 ): Promise<ClaudeResult> {
-  const prompt = `Review the open pull request for branch "${branch}" and post your findings as a PR review comment.`;
-  return runAgent('code-reviewer', prompt, cwd, maxBudgetUsd);
+  const prompt = `Review the open pull request for branch "${branch}" and post your findings as a PR review comment.${memorySection(cwd)}`;
+  return runAgent('code-reviewer', prompt, cwd, maxBudgetUsd, `code-reviewer:${branch}`);
 }

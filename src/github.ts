@@ -81,6 +81,76 @@ export async function hasOpenPullRequest(repo: string, branch: string): Promise<
   return prs.length > 0;
 }
 
+/** Label applied to a harness PR once it has exhausted its review cycles without approval, so it's not picked up again for automatic resumption until a human intervenes. */
+export const NEEDS_HUMAN_LABEL = 'needs-human';
+
+const HARNESS_BRANCH_ISSUE_PATTERN = /^harness\/issue-(\d+)-/;
+
+export interface ResumablePullRequest {
+  branch: string;
+  issueNumber: number;
+}
+
+/**
+ * Finds an open harness PR (branch prefixed `harness/`) whose review was left with
+ * `CHANGES_REQUESTED`, so the harness can resume its review loop on restart instead of leaving
+ * it stuck. PRs already labeled {@link NEEDS_HUMAN_LABEL} (review budget exhausted) are skipped.
+ */
+export async function findResumablePullRequest(repo: string): Promise<ResumablePullRequest | null> {
+  const { stdout } = await execFileAsync('gh', [
+    'pr',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'open',
+    '--json',
+    'headRefName,reviewDecision,labels',
+  ]);
+  const prs = JSON.parse(stdout) as Array<{
+    headRefName: string;
+    reviewDecision: string | null;
+    labels: Array<{ name: string }>;
+  }>;
+
+  for (const pr of prs) {
+    if (pr.reviewDecision !== 'CHANGES_REQUESTED') continue;
+    if (pr.labels.some((label) => label.name === NEEDS_HUMAN_LABEL)) continue;
+    const match = HARNESS_BRANCH_ISSUE_PATTERN.exec(pr.headRefName);
+    if (!match) continue;
+    return { branch: pr.headRefName, issueNumber: Number(match[1]) };
+  }
+  return null;
+}
+
+/**
+ * Labels a PR as needing human attention (creating the label first if it doesn't exist yet),
+ * used once the review loop has exhausted its cycle budget without reaching approval.
+ */
+export async function markPullRequestNeedsHuman(repo: string, branch: string): Promise<void> {
+  await execFileAsync('gh', [
+    'label',
+    'create',
+    NEEDS_HUMAN_LABEL,
+    '--repo',
+    repo,
+    '--color',
+    'B60205',
+    '--description',
+    'Needs human intervention, the harness could not resolve this automatically.',
+    '--force',
+  ]);
+  await execFileAsync('gh', [
+    'pr',
+    'edit',
+    branch,
+    '--repo',
+    repo,
+    '--add-label',
+    NEEDS_HUMAN_LABEL,
+  ]);
+}
+
 /**
  * Checks out `main` and fast-forwards it to `origin/main`. Called before creating a new issue
  * branch so it always branches from up-to-date main, not from whatever branch a previous issue

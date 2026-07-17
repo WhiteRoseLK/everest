@@ -8,6 +8,7 @@ export interface Config {
   pollIntervalMs: number;
   baseRetryDelayMs: number;
   maxRetryDelayMs: number;
+  maxRetryCount: number;
 }
 
 function required(name: string): string {
@@ -31,5 +32,6 @@ export function loadConfig(): Config {
     pollIntervalMs: numberEnv('POLL_INTERVAL_MS', 60_000),
     baseRetryDelayMs: numberEnv('BASE_RETRY_DELAY_MS', 60_000),
     maxRetryDelayMs: numberEnv('MAX_RETRY_DELAY_MS', 3_600_000),
+    maxRetryCount: numberEnv('MAX_RETRY_COUNT', 10),
   };
 }
