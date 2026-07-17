@@ -21,6 +21,19 @@ if [ -n "${FAKE_CLAUDE_RATE_LIMITED:-}" ]; then
   exit 0
 fi
 
+if [ -n "${FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP:-}" ]; then
+  echo "fake claude invoked (budget exceeded, WIP left uncommitted)" >> /tmp/fake-claude-invoked.marker
+  echo "partial work" > wip-file.txt
+  echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget"],"total_cost_usd":2.0}'
+  exit 0
+fi
+
+if [ -n "${FAKE_CLAUDE_BUDGET_EXCEEDED:-}" ]; then
+  echo "fake claude invoked (budget exceeded, no progress)" >> /tmp/fake-claude-invoked.marker
+  echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget"],"total_cost_usd":2.0}'
+  exit 0
+fi
+
 echo "fake claude invoked" > /tmp/fake-claude-invoked.marker
 echo "feature output" > feature.txt
 git add -A

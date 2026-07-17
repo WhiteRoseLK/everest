@@ -18,7 +18,7 @@ When invoked:
 5. Confirm CI passed: `statusCheckRollup` must show the `lint-and-test` check as `SUCCESS`. If it's still pending, wait briefly and recheck; if it failed, that's an automatic request-changes regardless of your own local run.
 6. Decide:
    - **All conditions met** (your own lint/test run is green, CI is green, no correctness/security/test/doc gaps): merge it yourself — `gh pr merge <branch> --squash --delete-branch --body "..."` summarizing what shipped. Note: `gh pr review --approve` fails with "Can not approve your own pull request" (PR and review share the same account) - don't bother trying it, just merge directly once you've decided it's ready.
-   - **Not ready**: `gh pr review <branch> --request-changes --body "..."`, with concrete, actionable findings (file/line references, what's wrong, what would fix it) — this is what the next issue-worker run will read to fix the PR.
+   - **Not ready**: `gh pr review --request-changes` fails on your own PR too (same restriction, "Can not request changes on your own pull request") - don't use it. Instead: post your findings as a plain comment (`gh pr comment <branch> --body "..."`, concrete, with file/line references, actionable enough for the next issue-worker run to fix), then apply the fixup label so the harness knows to loop back: `gh label create needs-fixup --repo <owner/repo> --color D93F0B --description "code-reviewer requested changes; issue-worker should address them." --force` followed by `gh pr edit <branch> --add-label needs-fixup`.
 
 ## Hard rules
 

@@ -9,10 +9,12 @@ import {
   openPullRequest,
   commentOnIssue,
   hasOpenPullRequest,
-  getReviewDecision,
   getPullRequestState,
+  getPullRequestLabels,
+  NEEDS_FIXUP_LABEL,
   findResumablePullRequest,
   markPullRequestNeedsHuman,
+  commitWorkInProgress,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -68,9 +70,10 @@ async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise
 /**
  * Runs code-reviewer against the branch. code-reviewer merges directly once it decides a PR is
  * ready (see .claude/agents/code-reviewer.md - it can't formally --approve its own PR, so it
- * merges instead of relying on a review decision). If it requests changes instead, this
- * re-invokes issue-worker with the feedback and re-reviews - repeating until merged or
- * `maxReviewCycles` is reached (a launch budget, so a stuck disagreement can't loop forever).
+ * merges instead). If it's not ready, code-reviewer applies {@link NEEDS_FIXUP_LABEL} (not
+ * `gh pr review --request-changes`, which also fails on your own PR); this re-invokes
+ * issue-worker with the feedback and re-reviews - repeating until merged or `maxReviewCycles`
+ * is reached (a launch budget, so a stuck disagreement can't loop forever).
  */
 async function runReviewLoop(
   issue: Issue,
@@ -91,10 +94,10 @@ async function runReviewLoop(
       return;
     }
 
-    const decision = await getReviewDecision(config.githubRepo, branch);
-    if (decision !== 'CHANGES_REQUESTED') {
+    const labels = await getPullRequestLabels(config.githubRepo, branch);
+    if (!labels.includes(NEEDS_FIXUP_LABEL)) {
       console.log(
-        `PR for issue #${issue.number} not merged yet (state: ${prState}, decision: ${decision ?? 'none'})`,
+        `PR for issue #${issue.number} not merged yet (state: ${prState}, no fixup requested)`,
       );
       return;
     }
@@ -121,6 +124,49 @@ async function runReviewLoop(
     `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
   );
   await markPullRequestNeedsHuman(config.githubRepo, branch);
+}
+
+/**
+ * Saves a bumped `retryCount` for another fresh sprint on the same branch, or gives up (comments
+ * on the issue and clears state) once `maxRetryCount` is exceeded. Shared by the two
+ * budget-exceeded fallback paths (nothing to checkpoint, or the checkpoint push itself failed)
+ * so a stuck issue can't retry forever regardless of which failure mode recurs.
+ */
+async function retryFreshSprintOrGiveUp(
+  issue: Issue,
+  branch: string,
+  config: Config,
+  cwd: string,
+  retryCount: number,
+  reason: string,
+): Promise<void> {
+  const nextRetryCount = retryCount + 1;
+
+  if (nextRetryCount > config.maxRetryCount) {
+    console.log(
+      `Issue #${issue.number} ${reason} across ${config.maxRetryCount} sprints, giving up`,
+    );
+    await commentOnIssue(
+      config.githubRepo,
+      issue,
+      `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+    );
+    clearState(cwd);
+    return;
+  }
+
+  saveState(
+    {
+      issueNumber: issue.number,
+      branch,
+      startedAt: new Date().toISOString(),
+      retryCount: nextRetryCount,
+    },
+    cwd,
+  );
+  console.log(
+    `Issue #${issue.number} sprint ${nextRetryCount}: ${reason}, retrying with a fresh sprint`,
+  );
 }
 
 async function handleIssue(
@@ -180,7 +226,54 @@ async function handleIssue(
     return;
   }
 
-  if (result.success) {
+  if (result.budgetExceeded) {
+    // The per-invocation budget is a guardrail on the subagent's sprint, not a verdict on the
+    // issue: checkpoint whatever exists and let the review loop (already built for exactly this
+    // "not done yet" situation) decide whether to continue, rather than abandoning the issue.
+    const committed = await commitWorkInProgress(
+      cwd,
+      `WIP checkpoint: issue #${issue.number} (budget reached)`,
+    );
+
+    if (!committed) {
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
+        cwd,
+        retryCount,
+        'hit its budget with nothing to checkpoint',
+      );
+      return;
+    }
+
+    console.log(
+      `Issue #${issue.number} hit its per-sprint budget; checkpointed progress, handing off to review`,
+    );
+
+    try {
+      // --no-verify: this is an admittedly-incomplete checkpoint, not finished agent work - it
+      // must bypass the repo's own Husky pre-push (lint+test), which it would likely fail.
+      await pushBranch(branch, cwd, { noVerify: true });
+    } catch (error) {
+      console.error(`Failed to push WIP checkpoint for issue #${issue.number}:`, error);
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
+        cwd,
+        retryCount,
+        'failed to push its WIP checkpoint',
+      );
+      return;
+    }
+
+    if (!(await hasOpenPullRequest(config.githubRepo, branch))) {
+      await openPullRequest(config.githubRepo, issue, branch, cwd);
+      console.log(`Opened WIP PR for issue #${issue.number}`);
+    }
+    await runReviewLoop(issue, branch, config, cwd);
+  } else if (result.success) {
     await pushBranch(branch, cwd);
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
@@ -199,8 +292,8 @@ async function handleIssue(
 }
 
 /**
- * Resumes the review loop on an already-open harness PR left with `CHANGES_REQUESTED`, e.g.
- * because the harness stopped between opening the PR and it getting approved. Returns whether
+ * Resumes the review loop on an already-open harness PR labeled {@link NEEDS_FIXUP_LABEL}, e.g.
+ * because the harness stopped between opening the PR and it getting merged. Returns whether
  * a PR was found and resumed, so the caller can skip picking a new issue this iteration.
  */
 async function resumePendingReview(config: Config, cwd: string): Promise<boolean> {
@@ -217,33 +310,52 @@ async function resumePendingReview(config: Config, cwd: string): Promise<boolean
   return true;
 }
 
+/**
+ * Runs one iteration's worth of work: resume in-progress state, resume a pending review, or
+ * pick up a new issue. Split out from {@link runLoop} so a single iteration's logic can be
+ * wrapped in error isolation without nesting the whole poll loop inside a try/catch.
+ */
+async function runIteration(config: Config, cwd: string): Promise<void> {
+  const state = loadState(cwd);
+
+  if (state) {
+    const issues = await listOpenIssues(config.githubRepo);
+    const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
+    if (!issue) {
+      await sleep(config.pollIntervalMs);
+      return;
+    }
+    await handleIssue(issue, state, config, cwd);
+    return;
+  }
+
+  if (await resumePendingReview(config, cwd)) return;
+
+  const issues = await listOpenIssues(config.githubRepo);
+  const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+  const issue: Issue | null = pickNextIssue(candidates);
+
+  if (!issue) {
+    await sleep(config.pollIntervalMs);
+    return;
+  }
+
+  await handleIssue(issue, state, config, cwd);
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(config: Config, cwd: string, iterations = Infinity): Promise<void> {
   for (let i = 0; i < iterations; i += 1) {
-    const state = loadState(cwd);
-
-    if (state) {
-      const issues = await listOpenIssues(config.githubRepo);
-      const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
-      if (!issue) {
-        await sleep(config.pollIntervalMs);
-        continue;
-      }
-      await handleIssue(issue, state, config, cwd);
-      continue;
-    }
-
-    if (await resumePendingReview(config, cwd)) continue;
-
-    const issues = await listOpenIssues(config.githubRepo);
-    const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
-    const issue: Issue | null = pickNextIssue(candidates);
-
-    if (!issue) {
+    // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
+    // never take down the whole process - that turns one bad issue into total downtime instead
+    // of one skipped cycle. Seen in practice: a stale local branch from a budget-exhausted
+    // attempt made the next `git checkout -b` throw, killing the container.
+    try {
+      await runIteration(config, cwd);
+    } catch (error) {
+      console.error('Unhandled error during loop iteration, continuing after a short delay:');
+      console.error(error);
       await sleep(config.pollIntervalMs);
-      continue;
     }
-
-    await handleIssue(issue, state, config, cwd);
   }
 }

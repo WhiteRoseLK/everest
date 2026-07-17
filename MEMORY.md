@@ -31,3 +31,12 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   précédent). Les labels `type:bug/type:feature/type:tech-debt` sont volontairement ignorés par
   le tri — purement informatifs, pas de scoring RICE/WSJF pour l'instant (sur-ingénierie évitée
   explicitement dans l'issue).
+
+- 2026-07-17 (PR #22) : les commits du harnais lui-même (ex: `commitWorkInProgress`, checkpoint
+  WIP) ne passent par aucun hook Claude Code (`PreToolUse` ne se déclenche que pour les tool calls
+  d'un agent, pas pour `execFileAsync('git', ['commit', ...])` appelé directement par le TS du
+  harnais) — mais `git push` déclenche quand même le vrai hook Husky `pre-push` du repo
+  (lint+test), quel que soit l'appelant. Un push de code volontairement incomplet/non vérifié doit
+  utiliser `--no-verify` explicitement (voir `pushBranch(..., { noVerify: true })`), sinon le push
+  échoue et — si l'échec n'est pas géré — peut faire boucler indéfiniment sans jamais avancer
+  `retryCount`.

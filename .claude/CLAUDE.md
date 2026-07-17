@@ -12,11 +12,26 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, vérifie que le check CI `lint-and-test` est vert, puis décide.
 
-`gh pr review --approve` échoue sur sa propre PR ("Can not approve your own pull request" — PR et review partagent le même compte `GH_TOKEN`). Le reviewer ne l'utilise donc pas : s'il juge la PR prête, il **merge directement** (`gh pr merge --squash --delete-branch`). S'il juge que ce n'est pas prêt, il utilise `gh pr review --request-changes` (ça, ça marche sur sa propre PR — seule l'approbation formelle est bloquée).
+`gh pr review --approve` **et** `gh pr review --request-changes` échouent tous les deux sur sa propre PR ("Can not approve/request changes on your own pull request" — PR et review partagent le même compte `GH_TOKEN`). Confirmé empiriquement le 17 juillet 2026 (le reviewer l'a découvert en essayant sur PR #22) : ce n'est pas seulement l'approbation qui est bloquée, contrairement à ce qu'on pensait initialement. Seuls les commentaires simples (`gh pr comment`) passent sur sa propre PR.
 
-Si `--request-changes` : le harnais rappelle `issue-worker` sur la même branche avec le retour du reviewer en contexte (`buildFixupPrompt`), repousse le commit, puis relance `code-reviewer`. Ce cycle se répète jusqu'au merge ou jusqu'à `MAX_REVIEW_CYCLES` (défaut 3, `runReviewLoop` dans `src/loop.ts`) — budget de lancement pour éviter une boucle infinie si l'agent et le reviewer n'arrivent jamais à s'accorder. Au-delà, un commentaire est posté sur l'issue pour signaler qu'une intervention humaine est nécessaire. Le harnais détecte la fin du cycle via `getPullRequestState()` (état `MERGED`), pas seulement via `reviewDecision` (qui reste `null` sur un merge direct, faute d'approve formel possible).
+Conséquence : `reviewDecision` (champ natif GitHub) ne peut donc **jamais** devenir `CHANGES_REQUESTED` sur une review de sa propre PR — ce champ est inutilisable comme signal ici. À la place :
+
+- Si le reviewer juge la PR prête : il **merge directement** (`gh pr merge --squash --delete-branch`).
+- Si ce n'est pas prêt : il poste ses findings en commentaire (`gh pr comment`) puis pose le label `needs-fixup` (`markPullRequestNeedsFixup()` dans `src/github.ts`) — c'est ce label, pas `reviewDecision`, que `runReviewLoop`/`getPullRequestLabels()` vérifient pour déclencher le cycle de correction.
+
+Si `needs-fixup` : le harnais rappelle `issue-worker` sur la même branche avec le retour du reviewer en contexte (`buildFixupPrompt`), repousse le commit, puis relance `code-reviewer`. Ce cycle se répète jusqu'au merge ou jusqu'à `MAX_REVIEW_CYCLES` (défaut 3, `runReviewLoop` dans `src/loop.ts`) — budget de lancement pour éviter une boucle infinie si l'agent et le reviewer n'arrivent jamais à s'accorder. Au-delà, un commentaire est posté sur l'issue et le PR est labellisé `needs-human` pour signaler qu'une intervention humaine est nécessaire. Le harnais détecte la fin du cycle via `getPullRequestState()` (état `MERGED`), vérifié avant le label à chaque itération.
 
 Avant de créer une nouvelle branche pour l'issue suivante, le harnais fait `checkoutMain()` (checkout + `pull --ff-only`) plutôt que de partir de la branche précédente — sinon une branche mergée-et-supprimée côté remote laisserait le prochain `git checkout -b` partir d'un historique obsolète (bug auto-repéré par le harnais, issue #17).
+
+## Budget Policy
+
+**Décision explicite de l'utilisatrice (17 juillet 2026)** : pas de budget max sur une _issue_. `MAX_BUDGET_USD_PER_ISSUE` (défaut $2) est un garde-fou sur une _invocation_ de sous-agent (un "sprint"), pas une deadline qui abandonne la tâche. Le vrai plafond global d'une issue, c'est `MAX_REVIEW_CYCLES` (un nombre de rounds, pas des dollars) — cohérent avec "les garde-fous vont sur les sous-agents, pas sur la tâche elle-même".
+
+Quand `issue-worker` épuise son budget sans finir (`ClaudeResult.budgetExceeded`, `src/claude.ts`) :
+
+1. `commitWorkInProgress()` (`src/github.ts`) committe le travail en cours sous l'identité `everest-harness` si le working tree n'est pas propre — un commit WIP, pas gaté par les hooks qualité (c'est explicitement provisoire, pas une unité de travail finie). Exclut `.harness/` du commit via pathspec, pas seulement via `.gitignore` (sinon un `.gitignore` mal configuré ferait committer l'état runtime du harnais comme si c'était du travail d'agent).
+2. S'il y a eu quelque chose à committer : push, ouverture/vérification de la PR, puis `runReviewLoop()` — le reviewer verra que c'est incomplet, postera ses observations et posera `needs-fixup`, ce qui rappelle `issue-worker` avec un budget frais. C'est le "reshuffle the cards, review, brainstorm" : on réutilise la boucle de review déjà construite pour "pas encore prêt" plutôt que d'inventer un nouveau mécanisme.
+3. S'il n'y a rien eu à committer (l'agent a passé tout son budget à explorer sans produire de diff) : retry immédiat avec un sprint frais sur la même branche, plafonné par `MAX_RETRY_COUNT` (même mécanisme que les rate-limits) avant d'escalader en `needs-human`.
 
 ## CI
 
@@ -45,7 +60,7 @@ Note : la branch protection classique et les rulesets GitHub ne sont pas disponi
 **Politique changée le 17 juillet 2026, décision explicite de l'utilisatrice** : le produit doit être autonome — deux agents distincts, l'un développe (`issue-worker`), l'autre valide et merge (`code-reviewer`). Ce n'est plus "le merge reste un geste humain" (ancienne règle, ne plus l'appliquer).
 
 - `code-reviewer` est le seul décideur de ce qui atteint `main`. Il merge lui-même (`gh pr merge`) une fois que **toutes** les conditions sont réunies : CI verte (`statusCheckRollup`), `npm run lint`/`npm test` verts en local sur son propre run (pas de confiance aveugle dans le diff), pas de bug de correctness/sécurité non traité, tests E2E présents, doc à jour si le changement le justifie.
-- S'il manque une seule de ces conditions : `--request-changes`, jamais de merge "en attendant".
+- S'il manque une seule de ces conditions : commentaire + label `needs-fixup` (voir Review Loop — `--request-changes` échoue sur sa propre PR), jamais de merge "en attendant".
 - `src/loop.ts` ne merge jamais lui-même — il ne fait qu'invoquer `code-reviewer` et lire l'état de la PR après coup (`getPullRequestState`). Toute la décision de merge vit dans l'agent, pas dans le code TypeScript du harnais.
 - Le seul gate qui reste réellement indépendant des agents est CI + branch protection (`enforce_admins: true`) : même `code-reviewer` ne peut pas merger si le check `lint-and-test` échoue.
 
@@ -77,6 +92,7 @@ Concrètement : `MEMORY.md` à la racine du repo consigne les leçons/patterns/d
 - `--permission-mode acceptEdits` ne suffit pas en headless : les appels Bash (donc `npm test`, `git commit`) sont refusés silencieusement sans personne pour approuver. Il faut `bypassPermissions`, ce qui n'est sûr que confiné dans le conteneur Docker du harnais.
 - `bypassPermissions` refuse de s'exécuter en root — le conteneur tourne avec l'utilisateur `node`.
 - `git push` en HTTPS a besoin du credential helper `gh auth git-credential` configuré globalement dans le conteneur (pas d'auth interactive possible en headless).
+- `runLoop` isole chaque itération dans un try/catch (`src/loop.ts`) : une erreur non gérée (ex: `createBranch` qui échoue sur une branche locale orpheline laissée par une tentative interrompue) est loguée puis la boucle continue après `pollIntervalMs`, plutôt que de faire planter tout le conteneur. `createBranch` est devenu idempotent (`git branch -D` avant `checkout -b`) pour la même raison. Bug repéré en observant le harnais tourner sans supervision : une issue trop ambitieuse pour son budget (#15) a planté tout le process, pas juste cette issue.
 
 ## References
 

@@ -6,6 +6,13 @@ import { recordCost } from './cost.js';
 export interface ClaudeResult {
   success: boolean;
   rateLimited: boolean;
+  /**
+   * True when the invocation was cut short by hitting `--max-budget-usd`. This is a per-invocation
+   * guardrail on the subagent, not a verdict on the issue - callers should treat it as "this sprint
+   * ran out of budget", checkpoint whatever progress exists, and let the review/fixup loop decide
+   * whether to continue, not as a reason to abandon the issue outright.
+   */
+  budgetExceeded?: boolean;
   errorSummary?: string;
   totalCostUsd?: number;
 }
@@ -157,6 +164,7 @@ async function runAgent(
     return {
       success: false,
       rateLimited: false,
+      budgetExceeded: parsed?.subtype === 'error_max_budget_usd',
       errorSummary: parsed?.errors?.join('; ') ?? proc.stderr ?? 'unknown error',
       totalCostUsd: parsed?.total_cost_usd,
     };

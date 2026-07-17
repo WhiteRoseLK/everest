@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -56,6 +56,9 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_VIEW;
     delete process.env.FAKE_CLAUDE_RATE_LIMITED;
+    delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED;
+    delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP;
+    delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -89,7 +92,7 @@ describe('runLoop end-to-end', () => {
     );
   });
 
-  it('resumes the review loop for an already-open PR left with CHANGES_REQUESTED', async () => {
+  it('resumes the review loop for an already-open PR labeled needs-fixup', async () => {
     const reviewerMarker = '/tmp/fake-code-reviewer-invoked.marker';
     rmSync(reviewerMarker, { force: true });
 
@@ -115,11 +118,11 @@ describe('runLoop end-to-end', () => {
     process.env.FAKE_GH_PR_LIST = JSON.stringify([
       {
         headRefName: 'harness/issue-1-test-issue',
-        reviewDecision: 'CHANGES_REQUESTED',
-        labels: [],
+        labels: [{ name: 'needs-fixup' }],
       },
     ]);
-    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ reviewDecision: 'APPROVED' });
+    // Simulates code-reviewer deciding to merge on this resumed pass.
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ state: 'MERGED', labels: [] });
 
     const config: Config = {
       githubRepo: 'fake/repo',
@@ -134,7 +137,7 @@ describe('runLoop end-to-end', () => {
 
     await runLoop(config, workDir, 1);
 
-    // The resumed review loop invoked code-reviewer, saw it's now approved, and did not
+    // The resumed review loop invoked code-reviewer, saw it's now merged, and did not
     // recreate the PR (openPullRequest is only called from the fresh-issue path).
     expect(existsSync(reviewerMarker)).toBe(true);
     expect(existsSync(prMarker)).toBe(false);
@@ -173,5 +176,118 @@ describe('runLoop end-to-end', () => {
 
     const statePath = join(workDir, '.harness/state.json');
     expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('survives an unexpected error in one iteration and processes the issue on the next', async () => {
+    const failMarker = join(tmpRoot, 'fail-once.marker');
+    writeFileSync(failMarker, '');
+    process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE = failMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // Iteration 1 hits the simulated `gh issue list` failure and must not crash the process;
+    // iteration 2 should proceed normally and open the PR, proving runLoop recovered.
+    await runLoop(config, workDir, 2);
+
+    expect(existsSync(prMarker)).toBe(true);
+  });
+
+  it('checkpoints WIP progress and hands off to review when the sprint budget is exhausted', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // The budget guardrail is on the sprint, not the issue: hitting it should not abandon the
+    // issue - the harness commits the uncommitted "wip-file.txt" as a checkpoint, pushes, opens
+    // a PR, and hands off to the normal review loop instead of giving up.
+    await runLoop(config, workDir, 1);
+
+    expect(existsSync(prMarker)).toBe(true);
+
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('WIP checkpoint');
+  });
+
+  it('retries with a fresh sprint when the budget is exhausted with nothing to checkpoint', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // Nothing to checkpoint yet, so no PR - just a saved retry state for the next sprint.
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
+  });
+
+  it('falls back to a bounded retry when pushing the WIP checkpoint itself fails', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP = '1';
+    // Force the checkpoint push to be rejected server-side, for a reason unrelated to client
+    // hooks (--no-verify already bypasses those) - a pre-receive hook is a stand-in for any
+    // server-side rejection (protected branch, network blip mid-push, etc). Added after the
+    // initial `git push -u origin main` in beforeEach already succeeded, so only this test's
+    // checkpoint push is affected - pull/fetch (used by checkoutMain) are untouched.
+    writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The push failure must not crash the loop or open a PR for an unpushed branch - it falls
+    // back to the same bounded retry-with-cap semantics as "nothing to checkpoint".
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
+
+    // The checkpoint commit itself still exists locally even though the push failed.
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('WIP checkpoint');
   });
 });
