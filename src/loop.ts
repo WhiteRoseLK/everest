@@ -126,6 +126,49 @@ async function runReviewLoop(
   await markPullRequestNeedsHuman(config.githubRepo, branch);
 }
 
+/**
+ * Saves a bumped `retryCount` for another fresh sprint on the same branch, or gives up (comments
+ * on the issue and clears state) once `maxRetryCount` is exceeded. Shared by the two
+ * budget-exceeded fallback paths (nothing to checkpoint, or the checkpoint push itself failed)
+ * so a stuck issue can't retry forever regardless of which failure mode recurs.
+ */
+async function retryFreshSprintOrGiveUp(
+  issue: Issue,
+  branch: string,
+  config: Config,
+  cwd: string,
+  retryCount: number,
+  reason: string,
+): Promise<void> {
+  const nextRetryCount = retryCount + 1;
+
+  if (nextRetryCount > config.maxRetryCount) {
+    console.log(
+      `Issue #${issue.number} ${reason} across ${config.maxRetryCount} sprints, giving up`,
+    );
+    await commentOnIssue(
+      config.githubRepo,
+      issue,
+      `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+    );
+    clearState(cwd);
+    return;
+  }
+
+  saveState(
+    {
+      issueNumber: issue.number,
+      branch,
+      startedAt: new Date().toISOString(),
+      retryCount: nextRetryCount,
+    },
+    cwd,
+  );
+  console.log(
+    `Issue #${issue.number} sprint ${nextRetryCount}: ${reason}, retrying with a fresh sprint`,
+  );
+}
+
 async function handleIssue(
   issue: Issue,
   state: HarnessState | null,
@@ -193,25 +236,13 @@ async function handleIssue(
     );
 
     if (!committed) {
-      retryCount += 1;
-      if (retryCount > config.maxRetryCount) {
-        console.log(
-          `Issue #${issue.number} made no committable progress across ${config.maxRetryCount} sprints, giving up`,
-        );
-        await commentOnIssue(
-          config.githubRepo,
-          issue,
-          `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
-        );
-        clearState(cwd);
-        return;
-      }
-      saveState(
-        { issueNumber: issue.number, branch, startedAt: new Date().toISOString(), retryCount },
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
         cwd,
-      );
-      console.log(
-        `Issue #${issue.number} sprint ${retryCount} hit its budget with nothing to checkpoint, retrying with a fresh sprint`,
+        retryCount,
+        'hit its budget with nothing to checkpoint',
       );
       return;
     }
@@ -219,7 +250,24 @@ async function handleIssue(
     console.log(
       `Issue #${issue.number} hit its per-sprint budget; checkpointed progress, handing off to review`,
     );
-    await pushBranch(branch, cwd);
+
+    try {
+      // --no-verify: this is an admittedly-incomplete checkpoint, not finished agent work - it
+      // must bypass the repo's own Husky pre-push (lint+test), which it would likely fail.
+      await pushBranch(branch, cwd, { noVerify: true });
+    } catch (error) {
+      console.error(`Failed to push WIP checkpoint for issue #${issue.number}:`, error);
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
+        cwd,
+        retryCount,
+        'failed to push its WIP checkpoint',
+      );
+      return;
+    }
+
     if (!(await hasOpenPullRequest(config.githubRepo, branch))) {
       await openPullRequest(config.githubRepo, issue, branch, cwd);
       console.log(`Opened WIP PR for issue #${issue.number}`);

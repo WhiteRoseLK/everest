@@ -238,9 +238,20 @@ export async function commitWorkInProgress(cwd: string, message: string): Promis
   return true;
 }
 
-/** Pushes the branch to `origin`, done by the harness itself rather than the agent. */
-export async function pushBranch(branch: string, cwd: string): Promise<void> {
-  await execFileAsync('git', ['push', '-u', 'origin', branch], { cwd });
+/**
+ * Pushes the branch to `origin`, done by the harness itself rather than the agent. `noVerify`
+ * skips the repo's Husky `pre-push` hook (lint+test) - needed for WIP checkpoint pushes
+ * (`commitWorkInProgress`), which are explicitly incomplete/unvetted by design and would
+ * otherwise be rejected by the same quality gate meant for finished agent work.
+ */
+export async function pushBranch(
+  branch: string,
+  cwd: string,
+  { noVerify = false }: { noVerify?: boolean } = {},
+): Promise<void> {
+  const args = ['push', '-u', 'origin', branch];
+  if (noVerify) args.push('--no-verify');
+  await execFileAsync('git', args, { cwd });
 }
 
 /** Opens a PR for the branch via `gh`, referencing the issue so merging closes it. */

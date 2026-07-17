@@ -252,4 +252,42 @@ describe('runLoop end-to-end', () => {
     const state = JSON.parse(readFileSync(statePath, 'utf-8'));
     expect(state.retryCount).toBe(1);
   });
+
+  it('falls back to a bounded retry when pushing the WIP checkpoint itself fails', async () => {
+    process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP = '1';
+    // Force the checkpoint push to be rejected server-side, for a reason unrelated to client
+    // hooks (--no-verify already bypasses those) - a pre-receive hook is a stand-in for any
+    // server-side rejection (protected branch, network blip mid-push, etc). Added after the
+    // initial `git push -u origin main` in beforeEach already succeeded, so only this test's
+    // checkpoint push is affected - pull/fetch (used by checkoutMain) are untouched.
+    writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The push failure must not crash the loop or open a PR for an unpushed branch - it falls
+    // back to the same bounded retry-with-cap semantics as "nothing to checkpoint".
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
+
+    // The checkpoint commit itself still exists locally even though the push failed.
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('WIP checkpoint');
+  });
 });
