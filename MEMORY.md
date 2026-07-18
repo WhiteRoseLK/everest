@@ -25,9 +25,9 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 ## Entrées
 
-- 2026-07-17 (issue #24) : `eslint.config.js` n'active le handling globals Node que pour `**/*.ts`
-  — un `.js` ajouté ailleurs (ex: `bin/everest.js`) se fait flaguer `'process' is not defined`.
-  Rester en `.ts`, ou ajouter un bloc `languageOptions.globals` dédié.
+- 2026-07-17 (issue #24) : `eslint.config.js` n'active les globals Node que pour `**/*.ts` — un
+  `.js` ajouté ailleurs (ex: `bin/everest.js`) se fait flaguer `'process' is not defined`. Rester
+  en `.ts`, ou ajouter un bloc `languageOptions.globals` dédié.
 
 - 2026-07-17 (issue #33) : pour tester un wrapper qui invoque une commande via un niveau
   d'indirection (ex: `spawnSync('docker', ['compose', 'exec', ..., 'claude', ...])`), le fake
@@ -37,27 +37,23 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 - 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
   `issue-worker` et `everest ask` créent tous deux des issues sous le même compte `GH_TOKEN`.
-  Pattern d'état persistant réutilisable pour tout futur "depuis la dernière fois" :
-  `.harness/<nom>.json` (gitignored), écrit après lecture, jamais une fenêtre glissante fixe codée
-  en dur (voir `listIssuesOpenedSince`/`src/catchup.ts`).
+  Pattern réutilisable pour tout futur "depuis la dernière fois" : `.harness/<nom>.json`
+  (gitignored), écrit après lecture, jamais une fenêtre glissante codée en dur (voir
+  `listIssuesOpenedSince`/`src/catchup.ts`).
 
 - 2026-07-18 (issue #39) : ne jamais combiner un pathspec de négation (`:!chemin`) avec un chemin
   déjà couvert par `.gitignore` — git le traite comme une référence explicite et échoue ("paths
-  are ignored..."). `commitWorkInProgress` (`src/github.ts`) fait `git add -A -- .` (laisse
-  `.gitignore` opérer normalement) puis `git reset -- .harness` en filet de sécurité.
+  are ignored..."). `commitWorkInProgress` (`src/github.ts`) fait `git add -A -- .` puis
+  `git reset -- .harness` en filet de sécurité.
 
 - 2026-07-18 (issue #38) : en démarrant sur une branche `harness/issue-<n>-...`, vérifier `git
 status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint précédent peut avoir
-  laissé du travail déjà `git add`é mais jamais committé (interrompu avant le commit). Si ce qui
-  est déjà staged est correct et complet (relire le diff, `npm test`/`npm run lint` dessus), le
-  committer directement plutôt que de le refaire depuis zéro.
+  laissé du travail déjà `git add`é mais jamais committé. Si c'est correct et complet (relire le
+  diff, `npm test`/`npm run lint` dessus), le committer directement plutôt que de le refaire.
 
-- 2026-07-18 (issue #43) : `npm start` (src/index.ts) ne recharge jamais son propre code une fois
-  démarré — ESM n'importe un module qu'une fois par process, donc `git pull` seul (déjà fait par
-  `checkoutMain()`) ne change rien au comportement en mémoire. Fix : `runLoop` capture le SHA
+- 2026-07-18 (issue #43) : ESM n'importe un module qu'une fois par process — `git pull` seul ne
+  change rien au comportement en mémoire de `npm start`. Fix : `runLoop` capture le SHA
   d'`origin/main` au démarrage et le revérifie à chaque itération (`restartIfMainAdvanced`,
-  `src/loop.ts`) ; dès qu'il a avancé, le process s'auto-exit (`process.exit(0)`) et
+  `src/loop.ts`) ; dès qu'il a avancé, `exitProcess(0)` (injectable, `process.exit` par défaut) et
   `restart: unless-stopped` (`docker-compose.yml`) relance `npm start` avec le code neuf. Rien
-  n'est perdu : l'état d'issue en cours vit dans `.harness/state.json`. Pour tester ça sans tuer
-  le process vitest, `runLoop` prend un paramètre `exitProcess` injectable (mock `vi.fn()` en
-  test, `process.exit` par défaut) plutôt que d'appeler `process.exit` en dur.
+  n'est perdu : l'état d'issue vit dans `.harness/state.json`.
