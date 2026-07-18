@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createBranch } from '../src/github.js';
+import { createBranch, deriveIssueTitle } from '../src/github.js';
 
 function git(args: string[], cwd: string): void {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
@@ -58,5 +58,47 @@ describe('createBranch', () => {
       encoding: 'utf-8',
     }).trim();
     expect(current).toBe('feature-x');
+  });
+});
+
+describe('deriveIssueTitle', () => {
+  it('returns the message unchanged when it is already short', () => {
+    expect(deriveIssueTitle('Add dark mode')).toBe('Add dark mode');
+  });
+
+  it('returns "Untitled issue" for an empty message', () => {
+    expect(deriveIssueTitle('')).toBe('Untitled issue');
+    expect(deriveIssueTitle('   \n more text')).toBe('Untitled issue');
+  });
+
+  it('only considers the first line of a multi-line message', () => {
+    expect(deriveIssueTitle('Add dark mode\n\nSome longer explanation here.')).toBe(
+      'Add dark mode',
+    );
+  });
+
+  it('cuts at the first sentence boundary when one falls within the limit', () => {
+    const message =
+      'Fix the bug. It has been crashing the whole app for a while now and nobody noticed.';
+    expect(deriveIssueTitle(message)).toBe('Fix the bug.');
+  });
+
+  it('truncates at a word boundary with an ellipsis when there is no early sentence break', () => {
+    const message =
+      'This is a very long single-sentence issue description with no punctuation at all ' +
+      'that keeps going well past the eighty character title limit that GitHub effectively ' +
+      'enforces for readability';
+
+    const title = deriveIssueTitle(message);
+
+    expect(title.length).toBeLessThanOrEqual(81); // 80 chars + ellipsis
+    expect(title.endsWith('…')).toBe(true);
+    expect(message.startsWith(title.slice(0, -1))).toBe(true);
+  });
+
+  it('never produces a title anywhere close to the GitHub 256-character limit', () => {
+    const message = 'x'.repeat(5000);
+
+    expect(deriveIssueTitle(message).length).toBeLessThan(256);
   });
 });

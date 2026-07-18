@@ -57,6 +57,22 @@ describe('everest CLI end-to-end', () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Issue created'));
   });
 
+  it('ask derives a short title instead of passing the full message as --title', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    const longMessage = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
+
+    await main(['ask', ...longMessage.split(' ')]);
+
+    const args = readFileSync(marker, 'utf-8');
+    const titleMatch = /--title\s+(\S+(?:\s\S+)*?)\s+--body/.exec(args);
+    expect(titleMatch).not.toBeNull();
+    const title = titleMatch?.[1] ?? '';
+    expect(title.length).toBeLessThanOrEqual(81);
+    expect(args).toContain(longMessage);
+  });
+
   it('chat starts/reuses the harness Docker container and runs claude inside it', () => {
     const status = runChat('fake/repo');
 
