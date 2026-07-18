@@ -101,6 +101,51 @@ describe('everest CLI end-to-end', () => {
     expect(args).toContain(longMessage);
   });
 
+  it('ask uses an explicit --title verbatim instead of the derived heuristic title', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    await main([
+      'ask',
+      'so',
+      'I',
+      'was',
+      'thinking',
+      'maybe',
+      'we',
+      'could',
+      'add',
+      'dark',
+      'mode',
+      'at',
+      'some',
+      'point',
+      '--title',
+      'Add dark mode',
+    ]);
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).toContain('--title Add dark mode --body');
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Issue created'));
+  });
+
+  it('ask ignores --title (with a warning) when the message splits into multiple issues', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+    process.env.FAKE_GH_COMMENT_MARKER = join(tmpRoot, 'comment.marker');
+
+    await main([
+      'ask',
+      '- add dark mode\n- fix the flaky login test',
+      '--title',
+      'Everything at once',
+    ]);
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).not.toContain('Everything at once');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--title is ignored'));
+  });
+
   it('chat starts/reuses the harness Docker container and runs claude inside it', () => {
     const status = runChat('fake/repo');
 

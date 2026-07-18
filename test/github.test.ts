@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -197,6 +197,20 @@ describe('deriveIssueTitle', () => {
 
     expect(deriveIssueTitle(message).length).toBeLessThan(256);
   });
+
+  it('strips a leading filler phrase before deriving the title', () => {
+    expect(deriveIssueTitle('so I think we should add dark mode')).toBe('Add dark mode');
+    expect(deriveIssueTitle('Please add dark mode to the settings page')).toBe(
+      'Add dark mode to the settings page',
+    );
+    expect(deriveIssueTitle('could you fix the flaky login test')).toBe('Fix the flaky login test');
+  });
+
+  it('leaves a message with no filler prefix untouched', () => {
+    expect(deriveIssueTitle('Add dark mode to the settings page')).toBe(
+      'Add dark mode to the settings page',
+    );
+  });
 });
 
 describe('splitIntoTopics', () => {
@@ -341,5 +355,37 @@ describe('createIssuesFromMessage', () => {
     expect(comments).toContain('see also');
     expect(comments).toContain(String(created[0].number));
     expect(comments).toContain(String(created[1].number));
+  });
+
+  it('uses an explicit title verbatim instead of the derived one for a single-topic message', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    await createIssuesFromMessage(
+      'fake/repo',
+      'so I was thinking maybe we could add dark mode at some point',
+      undefined,
+      'Add dark mode',
+    );
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).toContain('--title Add dark mode --body');
+  });
+
+  it('ignores an explicit title and warns when the message splits into multiple issues', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    const commentMarker = join(tmpRoot, 'comment.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+    process.env.FAKE_GH_COMMENT_MARKER = commentMarker;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const message = '- add dark mode\n- fix the flaky login test';
+    await createIssuesFromMessage('fake/repo', message, undefined, 'Everything at once');
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).not.toContain('Everything at once');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--title is ignored'));
+
+    errorSpy.mockRestore();
   });
 });

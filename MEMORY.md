@@ -29,12 +29,6 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   `.js` ajouté ailleurs (ex: `bin/everest.js`) se fait flaguer `'process' is not defined`. Rester
   en `.ts`, ou ajouter un bloc `languageOptions.globals` dédié.
 
-- 2026-07-17 (issue #33) : pour tester un wrapper qui invoque une commande via un niveau
-  d'indirection (ex: `spawnSync('docker', ['compose', 'exec', ..., 'claude', ...])`), le fake
-  binaire peut strip les args jusqu'au token de la commande finale puis `exec`-déléguer au fake
-  déjà sur le `PATH`, plutôt que dupliquer sa logique de simulation (voir
-  `test/fixtures/fake-bin/docker`).
-
 - 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
   `issue-worker` et `everest ask` créent tous deux des issues sous le même compte `GH_TOKEN`.
   Pattern réutilisable pour tout futur "depuis la dernière fois" : `.harness/<nom>.json`
@@ -46,18 +40,21 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   are ignored..."). `commitWorkInProgress` (`src/github.ts`) fait `git add -A -- .` puis
   `git reset -- .harness` en filet de sécurité.
 
-- 2026-07-18 (issue #38) : en démarrant sur une branche `harness/issue-<n>-...`, vérifier `git
-status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint précédent peut avoir
-  laissé du travail déjà `git add`é mais jamais committé. Si c'est correct et complet (relire le
-  diff, `npm test`/`npm run lint` dessus), le committer directement plutôt que de le refaire.
+- 2026-07-18 (issue #38) : en démarrant sur une branche `harness/issue-<n>-...`, vérifier
+  `git status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint précédent a pu
+  laisser du travail déjà `git add`é mais jamais committé. Si c'est correct/complet (relire le
+  diff, `npm test`/`npm run lint`), le committer directement plutôt que de le refaire.
 
 - 2026-07-18 (issue #43) : ESM n'importe un module qu'une fois par process — `git pull` seul ne
-  change rien au comportement en mémoire de `npm start`. Fix : `runLoop` capture le SHA
-  d'`origin/main` au démarrage et le revérifie à chaque itération (`restartIfMainAdvanced`,
-  `src/loop.ts`) ; dès qu'il a avancé, `exitProcess(0)` (injectable, `process.exit` par défaut) et
-  `restart: unless-stopped` (`docker-compose.yml`) relance `npm start` avec le code neuf. Rien
-  n'est perdu : l'état d'issue vit dans `.harness/state.json`. Piège repéré en review : si la
-  capture initiale échoue (`.catch(() => null)` avalé silencieusement), le garde
-  `if (startupMainCommit && ...)` désactivait la détection pour toute la durée de vie du process.
-  Fix : logger l'échec (`console.error`) et réessayer la capture à chaque itération tant qu'elle
-  est `null` (`tryCaptureMainCommit`), au lieu d'abandonner définitivement.
+  change rien au comportement en mémoire de `npm start`. Fix : `runLoop` recapture le SHA
+  d'`origin/main` à chaque itération (`restartIfMainAdvanced`) ; dès qu'il a avancé, `exitProcess(0)`
+  puis `restart: unless-stopped` relance `npm start` avec le code neuf (rien n'est perdu,
+  `.harness/state.json` survit). Si la capture initiale échoue, retenter à chaque itération plutôt
+  que désactiver silencieusement la détection pour la vie du process (`tryCaptureMainCommit`).
+
+- 2026-07-18 (issue #44) : pour un choix "heuristique déterministe vs. vrai jugement LLM" quand
+  l'appelant n'a pas toujours un LLM dans la boucle (`deriveIssueTitle`, `src/github.ts`) : donner
+  aux appelants qui _ont_ du jugement (l'agent `chat`, session LLM live) un paramètre explicite
+  pour court-circuiter l'heuristique (`--title` sur `everest ask` → `createIssuesFromMessage`),
+  plutôt que de forcer un shell-out `claude -p` coûteux pour le seul chemin CLI non-interactif, qui
+  garde l'heuristique (améliorée : filler-stripping) comme fallback raisonnable.

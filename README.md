@@ -18,7 +18,7 @@ taper des commandes `gh` à la main :
 ```
 node bin/everest.js                                                          # ouvre une session de chat interactive (= `chat`)
 node bin/everest.js chat                                                     # idem, explicite
-node bin/everest.js ask "<message>" [--priority <critical|high|medium|low>]  # crée une issue
+node bin/everest.js ask "<message>" [--priority <critical|high|medium|low>] [--title "<title>"]  # crée une issue
 node bin/everest.js status                                                   # PR ouvertes + issues fermées récemment
 node bin/everest.js blockers                                                 # PR labellisées needs-human + dernier commentaire
 node bin/everest.js catchup                                                  # résumé "qu'ai-je manqué" depuis le dernier catchup
@@ -58,6 +58,14 @@ via `inferLabels` (mots-clés), et `--priority` reste prioritaire sur l'urgence 
 Si le message est une liste à puces/numérotée regroupant plusieurs demandes indépendantes
 (`splitIntoTopics`), il est éclaté en autant d'issues séparées, croisées entre elles ("part of a
 split, see also #x, #y") plutôt que de rester une seule issue surdimensionnée.
+
+`--title "<title>"` court-circuite `deriveIssueTitle` (une heuristique de troncature, pas un vrai
+résumé — voir issue #44) avec un titre choisi explicitement par l'appelant, pour les cas où un
+vrai jugement est disponible (typiquement l'agent `chat`, qui compose déjà un titre concis avant
+d'appeler `ask`). N'a d'effet que quand `message` reste un seul topic : sur un message qui se
+scinde en plusieurs issues (`splitIntoTopics`), un titre unique ne peut pas s'appliquer à chacune
+d'elles, donc `--title` est ignoré (avec un avertissement) et chaque topic retombe sur son propre
+titre dérivé.
 
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 

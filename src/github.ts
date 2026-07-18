@@ -361,18 +361,44 @@ export async function commentOnIssue(repo: string, issue: Issue, body: string): 
 const MAX_ISSUE_TITLE_LENGTH = 80;
 
 /**
+ * Matches a leading filler phrase (`"please"`, `"so"`, `"I think"`, `"could you"`, ...) that adds
+ * no information to a title, so {@link deriveIssueTitle} can strip it before truncating. This is
+ * still a heuristic, not real summarization (see issue #44) — it only removes conversational
+ * throat-clearing so the truncation/sentence-boundary logic below has more of the actual content
+ * to work with, rather than spending the character budget on words like "please".
+ */
+const FILLER_PREFIX_PATTERN =
+  /^(?:please|so|hey|well|i think|i believe|i guess|you know|just wanted to (?:say|mention|note) that|it would be (?:nice|great) if|can you|could you|we should|you should)\b[,:]?\s+/i;
+
+/**
  * Derives a short issue title from a free-form message, so `gh issue create --title` never
  * receives the full (potentially very long) message — GitHub rejects titles over 256 characters
- * with "Title is too long". Uses the first line, cut at the first sentence boundary (`.`, `!`,
- * `?`) if one falls within {@link MAX_ISSUE_TITLE_LENGTH}, otherwise truncated at the nearest
- * word boundary with an ellipsis appended.
+ * with "Title is too long". This remains a deterministic truncation heuristic, not real LLM
+ * summarization (tracked as a known limitation in issue #44 for callers with no LLM in the loop,
+ * e.g. the plain non-chat `everest ask` CLI path) — callers that do have judgment available (the
+ * `chat` agent) should compose a title themselves and pass it explicitly instead (see
+ * {@link createIssuesFromMessage}'s `title` parameter). Strips a leading filler phrase (see
+ * {@link FILLER_PREFIX_PATTERN}), then uses the first line, cut at the first sentence boundary
+ * (`.`, `!`, `?`) if one falls within {@link MAX_ISSUE_TITLE_LENGTH}, otherwise truncated at the
+ * nearest word boundary with an ellipsis appended.
  */
 export function deriveIssueTitle(message: string): string {
   const firstLine = message.split('\n')[0]?.trim() ?? '';
   if (firstLine.length === 0) return 'Untitled issue';
-  if (firstLine.length <= MAX_ISSUE_TITLE_LENGTH) return firstLine;
 
-  const truncated = firstLine.slice(0, MAX_ISSUE_TITLE_LENGTH);
+  let stripped = firstLine;
+  // Repeats since fillers are sometimes chained ("so I think we should add dark mode"): a single
+  // pass would only remove "so ", leaving "I think we should ..." still in the title.
+  while (true) {
+    const next = stripped.replace(FILLER_PREFIX_PATTERN, '').trim();
+    if (next === stripped) break;
+    stripped = next;
+  }
+  const candidate =
+    stripped.length > 0 ? stripped.charAt(0).toUpperCase() + stripped.slice(1) : firstLine;
+  if (candidate.length <= MAX_ISSUE_TITLE_LENGTH) return candidate;
+
+  const truncated = candidate.slice(0, MAX_ISSUE_TITLE_LENGTH);
   const sentenceEnd = /[.!?]/.exec(truncated);
   if (sentenceEnd) return truncated.slice(0, sentenceEnd.index + 1);
 
@@ -559,20 +585,36 @@ export interface CreatedIssue {
 /**
  * Files one or more GitHub issues from a free-form message, applying the title/label/splitting
  * improvements from issue #38 instead of the bare {@link createIssue}: title via
- * {@link deriveIssueTitle}, a structured body via {@link formatIssueBody}, type/priority labels
- * via {@link inferLabels} (an explicit `priority` argument, e.g. from `everest ask --priority`,
- * overrides the inferred priority rather than stacking with it), and - when `message` bundles
- * multiple independent asks as a list (see {@link splitIntoTopics}) - one issue per topic,
- * cross-linked via a follow-up comment on each ("see also #x, #y") so the split context isn't
- * lost. Used by `runAsk` (`src/cli.ts`); the single-issue path stays available as
- * {@link createIssue} for callers that don't want inference/splitting.
+ * {@link deriveIssueTitle} unless `title` is given explicitly (see below), a structured body via
+ * {@link formatIssueBody}, type/priority labels via {@link inferLabels} (an explicit `priority`
+ * argument, e.g. from `everest ask --priority`, overrides the inferred priority rather than
+ * stacking with it), and - when `message` bundles multiple independent asks as a list (see
+ * {@link splitIntoTopics}) - one issue per topic, cross-linked via a follow-up comment on each
+ * ("see also #x, #y") so the split context isn't lost. Used by `runAsk` (`src/cli.ts`); the
+ * single-issue path stays available as {@link createIssue} for callers that don't want
+ * inference/splitting.
+ *
+ * `title`, when given, is used verbatim instead of the {@link deriveIssueTitle} heuristic — this
+ * is how callers with actual judgment available (e.g. the `chat` agent, which is a live LLM
+ * session unlike the plain non-interactive `everest ask` CLI path) can give a real summarized
+ * title instead of a truncated one (see issue #44). Only applies when `message` resolves to a
+ * single topic: an explicit title can't sensibly apply to every issue from a multi-topic split,
+ * so it's ignored (with a warning) and each topic falls back to its own derived title.
  */
 export async function createIssuesFromMessage(
   repo: string,
   message: string,
   priority?: string,
+  title?: string,
 ): Promise<CreatedIssue[]> {
   const topics = splitIntoTopics(message);
+  const explicitTitle = title?.trim();
+  if (explicitTitle && topics.length > 1) {
+    console.error(
+      'everest ask: --title is ignored for a message that splits into multiple issues; ' +
+        'each topic uses its own derived title instead.',
+    );
+  }
   const created: CreatedIssue[] = [];
 
   for (const topic of topics) {
@@ -583,12 +625,9 @@ export async function createIssuesFromMessage(
       : inferred.find((label) => label.startsWith('priority:'));
     if (priorityLabel) labels.push(priorityLabel);
 
-    const issue = await createIssueRaw(
-      repo,
-      deriveIssueTitle(topic),
-      formatIssueBody(topic),
-      labels,
-    );
+    const issueTitle =
+      explicitTitle && topics.length === 1 ? explicitTitle : deriveIssueTitle(topic);
+    const issue = await createIssueRaw(repo, issueTitle, formatIssueBody(topic), labels);
     created.push(issue);
   }
 

@@ -31,6 +31,14 @@ A human is talking to you directly in a terminal, in natural language, instead o
   bulleted/numbered list) is automatically split into separate cross-linked issues instead of one
   oversized one. If it looks like it's about to split into more than two or three issues from one
   offhand remark, check with the user first so they aren't surprised by an issue flood.
+  Always also pass `--title "<title>"` with a short, clear title you compose yourself
+  (summarizing the actual intent, not the user's exact wording) — `ask`'s built-in title
+  derivation is only a truncation heuristic (first line, cut at a sentence/word boundary), which
+  still produces a rambling title for a rambling message (issue #44). You're a live LLM session
+  with the judgment to do better, so don't rely on the fallback: read the user's message, decide
+  what it's actually asking for, and write that as the title. Only omit `--title` if the message
+  is about to be split into multiple issues (see above) — the flag applies to a single resulting
+  issue, so `ask` ignores it and derives one title per topic instead when a split happens.
 - Answer general questions about the project by reading files (README.md, CLAUDE.md, MEMORY.md,
   `src/`) or running read-only `gh`/`git` commands.
 
