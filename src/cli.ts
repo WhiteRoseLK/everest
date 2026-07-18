@@ -8,6 +8,7 @@ import {
   listRecentlyClosedIssues,
   listBlockers,
 } from './github.js';
+import { buildCatchupSummary, type CatchupSummary } from './catchup.js';
 
 /** Lookback window used by `everest status` when reporting recently closed issues. */
 const RECENT_ISSUES_WINDOW_HOURS = 24;
@@ -31,6 +32,7 @@ function printUsage(): void {
       '  everest ask "<message>" [--priority <critical|high|medium|low>]',
       '  everest status',
       '  everest blockers',
+      '  everest catchup',
       '  everest watch [--interval <ms>]',
     ].join('\n'),
   );
@@ -94,6 +96,58 @@ async function runBlockers(repo: string): Promise<void> {
     console.log(`#${blocker.number} ${blocker.title} [${blocker.branch}]`);
     console.log(`  Last comment: ${blocker.lastComment ?? '(no comment)'}`);
   }
+}
+
+/**
+ * Formats a {@link CatchupSummary} into human-readable lines for `everest catchup`, always ending
+ * with an explicit call-out of whether human intervention is needed right now - per issue #37,
+ * that signal must never be left implicit for the user to infer from a bare list.
+ */
+function formatCatchupSummary(summary: CatchupSummary): string[] {
+  const hoursAgo = Math.max(
+    0,
+    Math.round((Date.now() - new Date(summary.since).getTime()) / (60 * 60 * 1000)),
+  );
+  const whenLabel = hoursAgo === 0 ? 'less than an hour ago' : `${hoursAgo}h ago`;
+
+  const lines: string[] = [`Since you last checked (${whenLabel}):`];
+
+  const activity: string[] = [];
+  for (const issue of summary.closedIssues) {
+    activity.push(`  - Closed: issue #${issue.number} "${issue.title}"`);
+  }
+  for (const issue of summary.openedIssues) {
+    activity.push(`  - Opened: issue #${issue.number} "${issue.title}"`);
+  }
+  for (const pr of summary.inProgress) {
+    activity.push(
+      `  - In progress: PR #${pr.number} (issue #${pr.issueNumber}) - needs-fixup, review cycle in progress`,
+    );
+  }
+  lines.push(...(activity.length === 0 ? ['  (nothing happened)'] : activity));
+
+  lines.push('');
+  if (summary.blockers.length === 0) {
+    lines.push('Nothing needs you right now.');
+  } else {
+    lines.push('⚠️  Needs you:');
+    for (const blocker of summary.blockers) {
+      lines.push(`  - PR #${blocker.number} "${blocker.title}" [${blocker.branch}] needs-human`);
+      if (blocker.lastComment) lines.push(`    Last comment: ${blocker.lastComment}`);
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Handles `everest catchup`: a "what did I miss" summary covering everything since the user last
+ * ran this command (see `buildCatchupSummary` in `src/catchup.ts` for the persisted last-seen
+ * timestamp), ending with an explicit "needs you" call-out rather than a bare `gh` data dump.
+ */
+export async function runCatchup(repo: string, cwd: string = REPO_ROOT): Promise<void> {
+  const summary = await buildCatchupSummary(repo, cwd);
+  for (const line of formatCatchupSummary(summary)) console.log(line);
 }
 
 /**
@@ -203,7 +257,10 @@ export function runChat(repo: string, cwd: string = REPO_ROOT): number {
     `repository ${repo}. Use the gh CLI (already authenticated, scoped to --repo ${repo}) to ` +
     `answer questions about harness status (open PRs, review-loop state), blockers (PRs ` +
     `labeled needs-human), and to file new issues on the user's behalf when asked - mirroring ` +
-    `'everest status', 'everest blockers' and 'everest ask'. Keep answers short and ` +
+    `'everest status', 'everest blockers' and 'everest ask'. When asked something like "what did ` +
+    `I miss" or "what's the status", proactively run 'node bin/everest.js catchup' (from /app) ` +
+    `instead of just answering literally - it gives a team-style summary since the user last ` +
+    `checked in and always ends with an explicit "needs you" call-out. Keep answers short and ` +
     `terminal-friendly.`;
 
   ensureHarnessContainer(cwd);
@@ -269,6 +326,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'blockers':
       await runBlockers(config.githubRepo);
+      break;
+    case 'catchup':
+      await runCatchup(config.githubRepo);
       break;
     case 'watch':
       await runWatch(config.githubRepo, parseIntervalFlag(rest, config.watchPollIntervalMs));

@@ -496,6 +496,46 @@ export async function listRecentlyClosedIssues(
     .map((issue) => ({ number: issue.number, title: issue.title, closedAt: issue.closedAt! }));
 }
 
+export interface OpenedIssueSummary {
+  number: number;
+  title: string;
+  createdAt: string;
+}
+
+/**
+ * Lists issues opened since `sinceIso`, used by `everest catchup` (see `src/catchup.ts`) to
+ * surface new work filed since the user last checked in - including issues issue-worker itself
+ * opens as out-of-scope discoveries during the self-improvement loop (see CLAUDE.md's
+ * Architecture Overview). There's no reliable way to attribute *who* opened an issue via the
+ * `gh` CLI - issue-worker and `everest ask` both create issues under the same GH_TOKEN-owned
+ * account (see CLAUDE.md's Agent Identities) - so this simply lists everything opened in the
+ * window without claiming a specific author.
+ */
+export async function listIssuesOpenedSince(
+  repo: string,
+  sinceIso: string,
+): Promise<OpenedIssueSummary[]> {
+  const { stdout } = await execFileAsync('gh', [
+    'issue',
+    'list',
+    '--repo',
+    repo,
+    '--state',
+    'open',
+    '--json',
+    'number,title,createdAt',
+    '--limit',
+    '50',
+  ]);
+  const raw = JSON.parse(stdout) as Array<{
+    number: number;
+    title: string;
+    createdAt: string;
+  }>;
+  const cutoff = new Date(sinceIso).getTime();
+  return raw.filter((issue) => new Date(issue.createdAt).getTime() >= cutoff);
+}
+
 export interface Blocker {
   number: number;
   title: string;

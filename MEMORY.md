@@ -25,28 +25,16 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 ## Entrées
 
-- 2026-07-16 (issue #14) : `pickNextIssue` (src/loop.ts) supporte désormais 4 tiers
-  `priority:critical/high/medium/low` (le plus urgent en premier, FIFO au sein d'un tier). Une
-  issue sans label de priorité est traitée comme `priority:medium` (compat avec le comportement
-  précédent). Les labels `type:bug/type:feature/type:tech-debt` sont volontairement ignorés par
-  le tri — purement informatifs, pas de scoring RICE/WSJF pour l'instant (sur-ingénierie évitée
-  explicitement dans l'issue).
+- 2026-07-17 (PR #22) : les commits du harnais (`commitWorkInProgress`) ne passent par aucun hook
+  Claude Code, mais `git push` déclenche quand même le hook Husky `pre-push` (lint+test) quel que
+  soit l'appelant. Un push volontairement incomplet doit utiliser `--no-verify` explicitement
+  (`pushBranch(..., { noVerify: true })`), sinon l'échec non géré peut boucler indéfiniment sans
+  avancer `retryCount`.
 
-- 2026-07-17 (PR #22) : les commits du harnais lui-même (ex: `commitWorkInProgress`, checkpoint
-  WIP) ne passent par aucun hook Claude Code (`PreToolUse` ne se déclenche que pour les tool calls
-  d'un agent, pas pour `execFileAsync('git', ['commit', ...])` appelé directement par le TS du
-  harnais) — mais `git push` déclenche quand même le vrai hook Husky `pre-push` du repo
-  (lint+test), quel que soit l'appelant. Un push de code volontairement incomplet/non vérifié doit
-  utiliser `--no-verify` explicitement (voir `pushBranch(..., { noVerify: true })`), sinon le push
-  échoue et — si l'échec n'est pas géré — peut faire boucler indéfiniment sans jamais avancer
-  `retryCount`.
-
-- 2026-07-17 (issue #24) : `eslint.config.js` n'active `no-undef`-safe TS handling (globals
-  Node implicites) que pour les fichiers `**/*.ts` via `tseslint.configs.recommended` — un fichier
-  `.js` ajouté ailleurs (ex: `bin/everest.js`, wrapper CLI) tombe sous `js.configs.recommended`
-  nu et se fait flaguer `'process'/'console' is not defined`. Il faut soit rester en `.ts`, soit
-  ajouter un bloc `languageOptions.globals` dédié dans `eslint.config.js` pour ce chemin (voir le
-  bloc `files: ['bin/**/*.js']`).
+- 2026-07-17 (issue #24) : `eslint.config.js` n'active le handling globals Node que pour
+  `**/*.ts` (`tseslint.configs.recommended`) — un `.js` ajouté ailleurs (ex: `bin/everest.js`)
+  tombe sous `js.configs.recommended` nu et se fait flaguer `'process' is not defined`. Rester en
+  `.ts`, ou ajouter un bloc `languageOptions.globals` dédié (voir `files: ['bin/**/*.js']`).
 
 - 2026-07-17 (issue #33) : pour tester un `spawnSync('docker', ['compose', 'exec', ...])` sans
   Docker réel, le fake binaire `test/fixtures/fake-bin/docker` strippe les args jusqu'au token
@@ -61,3 +49,11 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   transitoire (réseau, rate limit, auth) remonter et tuer tout le process. Deuxième occurrence de
   ce même bug (repéré une première fois sur `runLoop`, voir entrée PR #22 ci-dessus) : à
   généraliser par défaut sur toute future commande de polling.
+
+- 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
+  `issue-worker` (self-improvement) et `everest ask` créent tous deux des issues sous le même
+  compte `GH_TOKEN` (voir "Agent Identities" dans CLAUDE.md). `listIssuesOpenedSince`
+  (`src/github.ts`, utilisé par `everest catchup` / `src/catchup.ts`) liste donc tout ce qui a été
+  ouvert dans la fenêtre sans prétendre attribuer l'auteur. Pattern d'état persistant réutilisable
+  pour tout futur "depuis la dernière fois" : `.harness/<nom>.json` (gitignored), écrit après
+  lecture, jamais une fenêtre glissante fixe codée en dur.

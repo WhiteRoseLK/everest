@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main, runWatch, runChat } from '../src/cli.js';
+import { main, runWatch, runChat, runCatchup } from '../src/cli.js';
 
 const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
 const DOCKER_COMPOSE_UP_MARKER = '/tmp/fake-docker-compose-up.marker';
@@ -34,6 +34,7 @@ describe('everest CLI end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN;
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
+    delete process.env.FAKE_GH_ISSUE_LIST_OPENED_SINCE;
     delete process.env.FAKE_GH_PR_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_CHAT_EXIT_CODE;
     delete process.env.FAKE_DOCKER_COMPOSE_UP_EXIT_CODE;
@@ -155,6 +156,65 @@ describe('everest CLI end-to-end', () => {
     await main(['blockers']);
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No blockers'));
+  });
+
+  it('catchup summarizes closed/opened issues, in-progress PRs, and calls out needs-human blockers', async () => {
+    process.env.FAKE_GH_ISSUE_LIST_CLOSED = JSON.stringify([
+      { number: 12, title: 'Add dark mode', closedAt: new Date().toISOString() },
+    ]);
+    process.env.FAKE_GH_ISSUE_LIST_OPENED_SINCE = JSON.stringify([
+      { number: 17, title: 'Follow-up: tighten X', createdAt: new Date().toISOString() },
+    ]);
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      { number: 25, headRefName: 'harness/issue-15-something', labels: [{ name: 'needs-fixup' }] },
+      { number: 22, headRefName: 'harness/issue-9-other', labels: [{ name: 'needs-human' }] },
+    ]);
+    process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN = JSON.stringify([
+      {
+        number: 22,
+        title: 'Fix flaky test',
+        headRefName: 'harness/issue-9-other',
+        comments: [{ body: 'reviewer could not resolve X after 3 cycles' }],
+      },
+    ]);
+
+    await runCatchup('fake/repo', tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Since you last checked');
+    expect(output).toContain('Closed: issue #12 "Add dark mode"');
+    expect(output).toContain('Opened: issue #17 "Follow-up: tighten X"');
+    expect(output).toContain('In progress: PR #25 (issue #15)');
+    expect(output).toContain('⚠️');
+    expect(output).toContain('Needs you');
+    expect(output).toContain('PR #22 "Fix flaky test"');
+    expect(output).toContain('reviewer could not resolve X after 3 cycles');
+  });
+
+  it('catchup reports nothing needs you when there are no needs-human blockers', async () => {
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([]);
+
+    await runCatchup('fake/repo', tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Nothing needs you right now.');
+    expect(output).toContain('(nothing happened)');
+  });
+
+  it('catchup persists a last-seen timestamp so a second call covers a fresh window', async () => {
+    process.env.FAKE_GH_ISSUE_LIST_CLOSED = JSON.stringify([
+      { number: 12, title: 'Add dark mode', closedAt: new Date().toISOString() },
+    ]);
+
+    await runCatchup('fake/repo', tmpRoot);
+    logSpy.mockClear();
+    delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
+
+    await runCatchup('fake/repo', tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).not.toContain('Add dark mode');
+    expect(output).toContain('(nothing happened)');
   });
 
   it('watch polls repeatedly and reports both needs-human blockers and needs-fixup PRs', async () => {
