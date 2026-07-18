@@ -58,3 +58,13 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   pour court-circuiter l'heuristique (`--title` sur `everest ask` → `createIssuesFromMessage`),
   plutôt que de forcer un shell-out `claude -p` coûteux pour le seul chemin CLI non-interactif, qui
   garde l'heuristique (améliorée : filler-stripping) comme fallback raisonnable.
+
+- 2026-07-18 (issue #54) : tout `pushBranch` dans `src/loop.ts` doit être dans un `try/catch` —
+  un push non protégé qui throw (ex: scope OAuth `workflow` manquant sur un push touchant
+  `.github/workflows/*`) remonte jusqu'au try/catch générique de `runLoop`, qui logue et continue
+  sans toucher `.harness/state.json` : le sprint suivant repart de zéro sur la même branche, ne
+  voit "rien à committer", commente puis efface l'état — boucle infinie sans jamais atteindre
+  `maxRetryCount` ni poser `needs-human`. Le push du travail terminé passe par
+  `retryFreshSprintOrGiveUp` (comme le checkpoint WIP) ; le push d'un fixup de review (PR déjà
+  ouverte, rejouer le sprint n'aiderait pas) escalade directement en commentaire +
+  `markPullRequestNeedsHuman`.

@@ -116,7 +116,28 @@ async function runReviewLoop(
       console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
       return;
     }
-    await pushBranch(branch, cwd);
+
+    try {
+      await pushBranch(branch, cwd);
+    } catch (error) {
+      // Unlike the budget-exceeded checkpoint push (which retries with a fresh sprint - see
+      // retryFreshSprintOrGiveUp), a PR already exists here and the fixup commit is already in
+      // place locally: retrying the sprint would redo already-finished work for no benefit if the
+      // push failure is persistent (e.g. issue #54 - a missing `workflow` OAuth scope rejects any
+      // push touching `.github/workflows/*` on every attempt). Escalate straight away instead of
+      // silently looping: left unguarded, this throw used to propagate out of runReviewLoop and
+      // get swallowed by runLoop's per-iteration try/catch, leaving state.json untouched so the
+      // next iteration retried the whole sprint from scratch, forever, without ever commenting or
+      // labeling the PR.
+      console.error(`Failed to push fixup for issue #${issue.number}:`, error);
+      await commentOnIssue(
+        config.githubRepo,
+        issue,
+        `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`,
+      );
+      await markPullRequestNeedsHuman(config.githubRepo, branch);
+      return;
+    }
   }
 
   await commentOnIssue(
@@ -129,9 +150,10 @@ async function runReviewLoop(
 
 /**
  * Saves a bumped `retryCount` for another fresh sprint on the same branch, or gives up (comments
- * on the issue and clears state) once `maxRetryCount` is exceeded. Shared by the two
- * budget-exceeded fallback paths (nothing to checkpoint, or the checkpoint push itself failed)
- * so a stuck issue can't retry forever regardless of which failure mode recurs.
+ * on the issue and clears state) once `maxRetryCount` is exceeded. Shared by the budget-exceeded
+ * fallback paths (nothing to checkpoint, or the checkpoint push itself failed) and the
+ * finished-work push failure in {@link handleIssue}, so a stuck issue can't retry forever
+ * regardless of which failure mode recurs.
  */
 async function retryFreshSprintOrGiveUp(
   issue: Issue,
@@ -275,7 +297,28 @@ async function handleIssue(
     }
     await runReviewLoop(issue, branch, config, cwd);
   } else if (result.success) {
-    await pushBranch(branch, cwd);
+    try {
+      await pushBranch(branch, cwd);
+    } catch (error) {
+      // Same reasoning as the WIP checkpoint push a few lines up: a push failure here (e.g. issue
+      // #54 - a missing `workflow` OAuth scope rejects any push touching `.github/workflows/*`)
+      // used to propagate unguarded out of handleIssue, get swallowed by runLoop's per-iteration
+      // try/catch, and leave state.json untouched. The branch's local commit survived, so the
+      // next sprint saw nothing new to commit, commented "no new commit produced", cleared state,
+      // and the loop picked the same issue again from scratch - forever, without ever hitting
+      // maxRetryCount or posting needs-human. Routing through retryFreshSprintOrGiveUp bounds the
+      // retries and escalates like every other push-failure path.
+      console.error(`Failed to push branch for issue #${issue.number}:`, error);
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
+        cwd,
+        retryCount,
+        'failed to push its finished work',
+      );
+      return;
+    }
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
 
