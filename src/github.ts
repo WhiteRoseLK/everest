@@ -334,8 +334,38 @@ export async function commentOnIssue(repo: string, issue: Issue, body: string): 
 }
 
 /**
+ * Maximum length (in characters) of a title derived by {@link deriveIssueTitle}. Well under
+ * GitHub's 256-character hard limit, but generous enough to keep the first sentence/clause of
+ * most messages intact.
+ */
+const MAX_ISSUE_TITLE_LENGTH = 80;
+
+/**
+ * Derives a short issue title from a free-form message, so `gh issue create --title` never
+ * receives the full (potentially very long) message — GitHub rejects titles over 256 characters
+ * with "Title is too long". Uses the first line, cut at the first sentence boundary (`.`, `!`,
+ * `?`) if one falls within {@link MAX_ISSUE_TITLE_LENGTH}, otherwise truncated at the nearest
+ * word boundary with an ellipsis appended.
+ */
+export function deriveIssueTitle(message: string): string {
+  const firstLine = message.split('\n')[0]?.trim() ?? '';
+  if (firstLine.length === 0) return 'Untitled issue';
+  if (firstLine.length <= MAX_ISSUE_TITLE_LENGTH) return firstLine;
+
+  const truncated = firstLine.slice(0, MAX_ISSUE_TITLE_LENGTH);
+  const sentenceEnd = /[.!?]/.exec(truncated);
+  if (sentenceEnd) return truncated.slice(0, sentenceEnd.index + 1);
+
+  const lastSpace = truncated.lastIndexOf(' ');
+  const cut = lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated;
+  return `${cut.trimEnd()}…`;
+}
+
+/**
  * Creates a new GitHub issue via `gh issue create`, used by the `everest ask` CLI command so
- * work can be handed to the harness without dropping into `gh` by hand. When `priority` is set,
+ * work can be handed to the harness without dropping into `gh` by hand. The title is derived
+ * from `message` via {@link deriveIssueTitle} (never the full message — see that function's
+ * doc) while the full `message` is always used as the issue body. When `priority` is set,
  * ensures the corresponding `priority:<level>` label exists (mirroring {@link addLabel}) and
  * applies it, so {@link Issue.labels}-based sorting (see `pickNextIssue` in `src/loop.ts`) picks
  * it up correctly. Returns the URL of the created issue, as printed by `gh`.
@@ -345,7 +375,16 @@ export async function createIssue(
   message: string,
   priority?: string,
 ): Promise<string> {
-  const args = ['issue', 'create', '--repo', repo, '--title', message, '--body', message];
+  const args = [
+    'issue',
+    'create',
+    '--repo',
+    repo,
+    '--title',
+    deriveIssueTitle(message),
+    '--body',
+    message,
+  ];
 
   if (priority) {
     const label = `priority:${priority}`;
