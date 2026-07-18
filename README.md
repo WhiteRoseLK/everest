@@ -51,6 +51,14 @@ dernière fois que tu as vérifié", pas une fenêtre glissante arbitraire. L'ag
 aussi ce résumé de façon proactive quand on lui demande "qu'ai-je manqué"/"where are we", sans
 attendre le nom exact de la sous-commande (voir `.claude/agents/chat.md`).
 
+`ask` (`createIssuesFromMessage`, `src/github.ts`) ne se contente plus de dumper le message tel
+quel (issue #38) : le titre reste dérivé via `deriveIssueTitle`, mais le corps est structuré (`##
+Request`), un label de type (`bug`/`enhancement`/`documentation`/`question`) est déduit du contenu
+via `inferLabels` (mots-clés), et `--priority` reste prioritaire sur l'urgence déduite du texte.
+Si le message est une liste à puces/numérotée regroupant plusieurs demandes indépendantes
+(`splitIntoTopics`), il est éclaté en autant d'issues séparées, croisées entre elles ("part of a
+split, see also #x, #y") plutôt que de rester une seule issue surdimensionnée.
+
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 
 ## Structure

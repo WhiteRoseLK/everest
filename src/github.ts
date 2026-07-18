@@ -369,49 +369,235 @@ export function deriveIssueTitle(message: string): string {
 }
 
 /**
+ * Matches a single line that opens a bullet or numbered list item (`- `, `* `, `1.`, `2)`, ...),
+ * capturing the item's text. Used by {@link splitIntoTopics} to recognize a free-form message
+ * that bundles several independent asks into one list rather than prose.
+ */
+const LIST_ITEM_PATTERN = /^\s*(?:[-*]|\d+[.)])\s+(.+)$/;
+
+/**
+ * Splits a free-form message into independent topics when it's clearly a list of separate asks
+ * (each line starting with `-`, `*`, or `1.`/`1)`), so {@link createIssuesFromMessage} can file
+ * one issue per topic instead of one oversized issue bundling unrelated work (see issue #38).
+ * Continuation lines (non-empty, non-list lines following a list item) are appended to that
+ * item, so a topic can still wrap across multiple lines. Returns a single-element array
+ * containing the trimmed original message when fewer than two list items are found — this is a
+ * heuristic, not a guarantee every multi-topic message gets split, so plain prose without list
+ * markers is always left as one issue.
+ */
+export function splitIntoTopics(message: string): string[] {
+  const lines = message.split('\n');
+  const items: string[] = [];
+  let inList = false;
+
+  for (const line of lines) {
+    const match = LIST_ITEM_PATTERN.exec(line);
+    if (match) {
+      inList = true;
+      items.push(match[1].trim());
+    } else if (inList && line.trim() !== '') {
+      items[items.length - 1] = `${items[items.length - 1]} ${line.trim()}`;
+    }
+  }
+
+  if (items.length < 2) return [message.trim()];
+  return items.map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+/** Keyword patterns used by {@link inferLabels} to guess the right `type` label for a message. */
+const BUG_PATTERN = /\b(bug|broken|crash(?:es|ing)?|fails?|failing|error|regression)\b/i;
+const DOCS_PATTERN = /\b(docs?|documentation|readme|typo)\b/i;
+const QUESTION_PATTERN = /\?\s*$|^\s*(why|how|what|when|should|does|is it possible)\b/i;
+const CRITICAL_URGENCY_PATTERN = /\b(urgent|asap|critical|blocking|breaks? production)\b/i;
+const HIGH_URGENCY_PATTERN = /\b(important|high priority|soon)\b/i;
+
+/**
+ * Colors/descriptions for the labels {@link inferLabels} can produce, used to `gh label create
+ * --force` each one before applying it (idempotent - creates it if missing, updates it to this
+ * canonical color/description if it already exists) so `gh issue create --label` never fails on
+ * a nonexistent label.
+ */
+const LABEL_METADATA: Record<string, { color: string; description: string }> = {
+  bug: { color: 'd73a4a', description: "Something isn't working" },
+  enhancement: { color: 'a2eeef', description: 'New feature or request' },
+  documentation: { color: '0075ca', description: 'Improvements or additions to documentation' },
+  question: { color: 'd876e3', description: 'Further information is requested' },
+};
+
+/**
+ * Infers which existing repo labels apply to a free-form message: exactly one `type` label
+ * (`bug`, `documentation`, `question`, defaulting to `enhancement` when nothing else matches) and
+ * optionally a `priority:<level>` label when the wording implies urgency (`urgent`/`critical` →
+ * `priority:critical`, `important`/`soon` → `priority:high`). Used by
+ * {@link createIssuesFromMessage} so `everest ask` no longer requires `--priority` to be passed
+ * by hand to get a reasonable label, per issue #38. Keyword-based, not exhaustive - explicit
+ * `--priority` always takes precedence over the inferred one (see
+ * {@link createIssuesFromMessage}).
+ */
+export function inferLabels(message: string): string[] {
+  const labels: string[] = [];
+  if (BUG_PATTERN.test(message)) labels.push('bug');
+  else if (DOCS_PATTERN.test(message)) labels.push('documentation');
+  else if (QUESTION_PATTERN.test(message)) labels.push('question');
+  else labels.push('enhancement');
+
+  if (CRITICAL_URGENCY_PATTERN.test(message)) labels.push('priority:critical');
+  else if (HIGH_URGENCY_PATTERN.test(message)) labels.push('priority:high');
+
+  return labels;
+}
+
+/**
+ * Ensures `label` exists on `repo` (creating or updating it via `gh label create --force`) then
+ * returns it unchanged, so callers can chain this into a `--label` argument list. `priority:*`
+ * labels use a shared blue/`Priority: <level>` convention since they're generated, not one of the
+ * fixed {@link LABEL_METADATA} entries.
+ */
+async function ensureLabelExists(repo: string, label: string): Promise<string> {
+  const metadata = LABEL_METADATA[label];
+  const [color, description] = metadata
+    ? [metadata.color, metadata.description]
+    : label.startsWith('priority:')
+      ? ['BFD4F2', `Priority: ${label.slice('priority:'.length)}`]
+      : ['ededed', label];
+
+  await execFileAsync('gh', [
+    'label',
+    'create',
+    label,
+    '--repo',
+    repo,
+    '--color',
+    color,
+    '--description',
+    description,
+    '--force',
+  ]);
+  return label;
+}
+
+/**
+ * Formats a topic (a full message, or one item from {@link splitIntoTopics}) into a structured
+ * issue body instead of dumping raw text with no scaffolding, per issue #38. `relatedIssues`
+ * cross-links sibling issues created from the same originally-bundled request (see
+ * {@link createIssuesFromMessage}), so context isn't lost when a multi-topic message gets split.
+ */
+export function formatIssueBody(topic: string, relatedIssues: number[] = []): string {
+  const lines = ['## Request', '', topic];
+  if (relatedIssues.length > 0) {
+    lines.push(
+      '',
+      '---',
+      `Part of a split multi-topic request — see also ${relatedIssues.map((n) => `#${n}`).join(', ')}.`,
+    );
+  }
+  lines.push('', '---', 'Filed via `everest ask`.');
+  return lines.join('\n');
+}
+
+/**
+ * Creates a new GitHub issue via `gh issue create` with an already-resolved title/body/labels.
+ * Internal building block for {@link createIssuesFromMessage}; ensures every label exists first
+ * (see {@link ensureLabelExists}) so the `--label` flags never fail on a nonexistent label.
+ * Returns the created issue's number (parsed from the URL `gh` prints) and that URL.
+ */
+async function createIssueRaw(
+  repo: string,
+  title: string,
+  body: string,
+  labels: string[],
+): Promise<{ number: number; url: string }> {
+  for (const label of labels) await ensureLabelExists(repo, label);
+
+  const args = ['issue', 'create', '--repo', repo, '--title', title, '--body', body];
+  for (const label of labels) args.push('--label', label);
+
+  const { stdout } = await execFileAsync('gh', args);
+  const url = stdout.trim();
+  const match = /\/issues\/(\d+)/.exec(url);
+  return { number: match ? Number(match[1]) : NaN, url };
+}
+
+/**
  * Creates a new GitHub issue via `gh issue create`, used by the `everest ask` CLI command so
  * work can be handed to the harness without dropping into `gh` by hand. The title is derived
  * from `message` via {@link deriveIssueTitle} (never the full message — see that function's
  * doc) while the full `message` is always used as the issue body. When `priority` is set,
- * ensures the corresponding `priority:<level>` label exists (mirroring {@link addLabel}) and
- * applies it, so {@link Issue.labels}-based sorting (see `pickNextIssue` in `src/loop.ts`) picks
- * it up correctly. Returns the URL of the created issue, as printed by `gh`.
+ * ensures the corresponding `priority:<level>` label exists (mirroring {@link ensureLabelExists})
+ * and applies it, so {@link Issue.labels}-based sorting (see `pickNextIssue` in `src/loop.ts`)
+ * picks it up correctly. Returns the URL of the created issue, as printed by `gh`.
  */
 export async function createIssue(
   repo: string,
   message: string,
   priority?: string,
 ): Promise<string> {
-  const args = [
-    'issue',
-    'create',
-    '--repo',
-    repo,
-    '--title',
-    deriveIssueTitle(message),
-    '--body',
-    message,
-  ];
+  const labels = priority ? [`priority:${priority}`] : [];
+  const { url } = await createIssueRaw(repo, deriveIssueTitle(message), message, labels);
+  return url;
+}
 
-  if (priority) {
-    const label = `priority:${priority}`;
-    await execFileAsync('gh', [
-      'label',
-      'create',
-      label,
-      '--repo',
+/** One issue created by {@link createIssuesFromMessage}: its number and the URL `gh` printed. */
+export interface CreatedIssue {
+  number: number;
+  url: string;
+}
+
+/**
+ * Files one or more GitHub issues from a free-form message, applying the title/label/splitting
+ * improvements from issue #38 instead of the bare {@link createIssue}: title via
+ * {@link deriveIssueTitle}, a structured body via {@link formatIssueBody}, type/priority labels
+ * via {@link inferLabels} (an explicit `priority` argument, e.g. from `everest ask --priority`,
+ * overrides the inferred priority rather than stacking with it), and - when `message` bundles
+ * multiple independent asks as a list (see {@link splitIntoTopics}) - one issue per topic,
+ * cross-linked via a follow-up comment on each ("see also #x, #y") so the split context isn't
+ * lost. Used by `runAsk` (`src/cli.ts`); the single-issue path stays available as
+ * {@link createIssue} for callers that don't want inference/splitting.
+ */
+export async function createIssuesFromMessage(
+  repo: string,
+  message: string,
+  priority?: string,
+): Promise<CreatedIssue[]> {
+  const topics = splitIntoTopics(message);
+  const created: CreatedIssue[] = [];
+
+  for (const topic of topics) {
+    const inferred = inferLabels(topic);
+    const labels = inferred.filter((label) => !label.startsWith('priority:'));
+    const priorityLabel = priority
+      ? `priority:${priority}`
+      : inferred.find((label) => label.startsWith('priority:'));
+    if (priorityLabel) labels.push(priorityLabel);
+
+    const issue = await createIssueRaw(
       repo,
-      '--color',
-      'BFD4F2',
-      '--description',
-      `Priority: ${priority}`,
-      '--force',
-    ]);
-    args.push('--label', label);
+      deriveIssueTitle(topic),
+      formatIssueBody(topic),
+      labels,
+    );
+    created.push(issue);
   }
 
-  const { stdout } = await execFileAsync('gh', args);
-  return stdout.trim();
+  if (created.length > 1) {
+    for (const issue of created) {
+      const others = created
+        .filter((other) => other.number !== issue.number)
+        .map((other) => other.number);
+      if (others.length === 0 || Number.isNaN(issue.number)) continue;
+      await execFileAsync('gh', [
+        'issue',
+        'comment',
+        String(issue.number),
+        '--repo',
+        repo,
+        '--body',
+        `Part of a split multi-topic request — see also ${others.map((n) => `#${n}`).join(', ')}.`,
+      ]);
+    }
+  }
+
+  return created;
 }
 
 /** Status of a harness PR as surfaced by `everest status`, derived from its labels. */

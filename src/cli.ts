@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadConfig } from './config.js';
 import {
-  createIssue,
+  createIssuesFromMessage,
   listHarnessPullRequests,
   listRecentlyClosedIssues,
   listBlockers,
@@ -39,8 +39,10 @@ function printUsage(): void {
 }
 
 /**
- * Handles `everest ask`: files a new GitHub issue for the harness to pick up, optionally tagged
- * with a `priority:<level>` label consumed by `pickNextIssue` (see `src/loop.ts`).
+ * Handles `everest ask`: files one or more GitHub issues for the harness to pick up, via
+ * {@link createIssuesFromMessage} (title/label inference plus multi-topic splitting — see issue
+ * #38) rather than a bare title/body dump. `--priority` still overrides the inferred urgency
+ * label when passed.
  */
 async function runAsk(args: string[], repo: string): Promise<void> {
   let priority: string | undefined;
@@ -58,8 +60,13 @@ async function runAsk(args: string[], repo: string): Promise<void> {
     throw new Error('everest ask requires a message, e.g. everest ask "add dark mode"');
   }
 
-  const url = await createIssue(repo, message, priority);
-  console.log(`Issue created: ${url}`);
+  const created = await createIssuesFromMessage(repo, message, priority);
+  if (created.length === 1) {
+    console.log(`Issue created: ${created[0].url}`);
+  } else {
+    console.log(`Split into ${created.length} issues:`);
+    for (const issue of created) console.log(`  ${issue.url}`);
+  }
 }
 
 /** Handles `everest status`: shows open harness PRs and their state, plus recently closed issues. */

@@ -23,10 +23,19 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
 fi
 
 if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
+  # Appends (not overwrites) so a single test can assert on every call when `createIssuesFromMessage`
+  # (src/github.ts) splits one request into several `gh issue create` invocations. A body can
+  # itself contain newlines, so each record ends with an explicit separator line rather than
+  # relying on one record per line.
   if [ -n "${FAKE_GH_ISSUE_CREATE_MARKER:-}" ]; then
-    echo "$@" > "$FAKE_GH_ISSUE_CREATE_MARKER"
+    { echo "$@"; echo '---FAKE_GH_ISSUE_CREATE_END---'; } >> "$FAKE_GH_ISSUE_CREATE_MARKER"
   fi
-  echo "https://example.invalid/issues/2"
+  # Increments per marker file so each call in a split gets a distinct issue number, starting at
+  # 2 (matching the previous fixed-URL behavior for the common single-issue-create case).
+  counter_file="${FAKE_GH_ISSUE_CREATE_MARKER:-/tmp/fake-gh-issue-create}.counter"
+  n=$(cat "$counter_file" 2>/dev/null || echo 2)
+  echo $((n + 1)) > "$counter_file"
+  echo "https://example.invalid/issues/$n"
   exit 0
 fi
 

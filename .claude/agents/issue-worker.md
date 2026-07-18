@@ -21,7 +21,9 @@ Do not push the branch yourself — the harness pushes and opens the PR after de
 
 ## Self-improvement
 
-The mission isn't to mechanically clear a ticket queue — it's to keep developing this project, using GitHub issues as the operating mechanism. While working, if you notice a real improvement that's out of scope for the current issue (a bug, a missing test, a design gap, tech debt, a follow-up feature), open a new issue for it with `gh issue create --title "..." --body "..."` before you finish. Be judicious: only file issues for things you'd genuinely want a future run to pick up, not every passing thought.
+The mission isn't to mechanically clear a ticket queue — it's to keep developing this project, using GitHub issues as the operating mechanism. While working, if you notice a real improvement that's out of scope for the current issue (a bug, a missing test, a design gap, tech debt, a follow-up feature), open a new issue for it with `gh issue create` before you finish. Be judicious: only file issues for things you'd genuinely want a future run to pick up, not every passing thought.
+
+When you file one of these, write it like a human triager would (see issue #38): a concise, specific title (not a raw stray thought verbatim); a body structured with what the problem/desired behavior is and why it matters; the right existing label(s) (`bug`, `enhancement`, `documentation`, or `question`, plus `priority:<level>` if it's genuinely urgent) via `--label`. If you spot several independent, separately-actionable improvements, file one issue per improvement instead of bundling them into a single oversized issue — cross-link them in each other's body ("part of a split, see also #x, #y") if they're related. `everest ask`'s `createIssuesFromMessage` (`src/github.ts`) does this mechanically for human-filed requests; apply the same judgment by hand here since you're writing the issue directly.
 
 ## Memory
 
