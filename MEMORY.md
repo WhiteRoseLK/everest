@@ -43,13 +43,6 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   `claude`. Pattern réutilisable pour tout futur wrapper qui invoque une commande via un niveau
   d'indirection supplémentaire (ici `docker compose exec` autour de `claude`).
 
-- 2026-07-17 (issue #26 / PR #28) : tout poll loop de longue durée destiné à tourner sans
-  supervision (`runLoop` dans `src/loop.ts`, `runWatch` dans `src/cli.ts`) doit isoler chaque
-  itération dans son propre try/catch (log + continue) plutôt que laisser une erreur `gh`
-  transitoire (réseau, rate limit, auth) remonter et tuer tout le process. Deuxième occurrence de
-  ce même bug (repéré une première fois sur `runLoop`, voir entrée PR #22 ci-dessus) : à
-  généraliser par défaut sur toute future commande de polling.
-
 - 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
   `issue-worker` (self-improvement) et `everest ask` créent tous deux des issues sous le même
   compte `GH_TOKEN` (voir "Agent Identities" dans CLAUDE.md). `listIssuesOpenedSince`
@@ -67,3 +60,10 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   travail normalement) puis `git reset -- .harness` en filet de sécurité si `.gitignore` est
   absent/mal configuré (`git reset` n'échoue pas sur un chemin jamais indexé). Généraliser : ne
   jamais combiner un pathspec de négation avec un chemin déjà couvert par `.gitignore`.
+
+- 2026-07-18 (issue #38) : en démarrant sur une branche `harness/issue-<n>-...`, vérifier `git
+status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint précédent peut avoir
+  laissé du travail déjà `git add`é mais jamais committé (interrompu avant le commit, ex. budget
+  épuisé pile avant `commitWorkInProgress`, ou un plantage). Si ce qui est déjà staged est correct
+  et complet (relire le diff, faire tourner `npm test`/`npm run lint` dessus), le vérifier puis le
+  committer directement plutôt que de le refaire depuis zéro.
