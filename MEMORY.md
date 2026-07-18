@@ -56,4 +56,8 @@ status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint préc
   d'`origin/main` au démarrage et le revérifie à chaque itération (`restartIfMainAdvanced`,
   `src/loop.ts`) ; dès qu'il a avancé, `exitProcess(0)` (injectable, `process.exit` par défaut) et
   `restart: unless-stopped` (`docker-compose.yml`) relance `npm start` avec le code neuf. Rien
-  n'est perdu : l'état d'issue vit dans `.harness/state.json`.
+  n'est perdu : l'état d'issue vit dans `.harness/state.json`. Piège repéré en review : si la
+  capture initiale échoue (`.catch(() => null)` avalé silencieusement), le garde
+  `if (startupMainCommit && ...)` désactivait la détection pour toute la durée de vie du process.
+  Fix : logger l'échec (`console.error`) et réessayer la capture à chaque itération tant qu'elle
+  est `null` (`tryCaptureMainCommit`), au lieu d'abandonner définitivement.

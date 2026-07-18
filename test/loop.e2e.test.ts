@@ -329,4 +329,52 @@ describe('runLoop end-to-end', () => {
     expect(exitProcess).toHaveBeenCalledTimes(1);
     expect(exitProcess).toHaveBeenCalledWith(0);
   });
+
+  it(
+    'recovers from a failed startup fetch of origin/main instead of disabling the restart ' +
+      'check for the rest of the process, and still detects a later advance',
+    async () => {
+      // The very first `git fetch origin main` (the startup capture in runLoop) fails once,
+      // simulating a transient network blip right as the container comes up - see the review
+      // feedback on issue #43: this must not silently disable self-restart detection forever.
+      const fetchFailMarker = join(tmpRoot, 'git-fetch-fail-once.marker');
+      writeFileSync(fetchFailMarker, '');
+      process.env.FAKE_GIT_FETCH_MAIN_FAIL_ONCE = fetchFailMarker;
+      // origin/main advances mid-sprint on iteration 1, same as the test above.
+      process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN = '1';
+      const exitProcess = vi.fn();
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const config: Config = {
+        githubRepo: 'fake/repo',
+        maxBudgetUsdPerIssue: 1,
+        maxBudgetUsdPerReview: 1,
+        maxReviewCycles: 3,
+        watchPollIntervalMs: 30_000,
+        pollIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetryDelayMs: 1,
+        maxRetryCount: 10,
+      };
+
+      try {
+        // Iteration 1: the startup fetch already failed before the loop began, so it retries
+        // lazily here, succeeds (the marker is now gone), and processes issue #1 (advancing
+        // origin/main as a side effect). Iteration 2 must still catch that advance and exit -
+        // proving the one-time fetch failure didn't permanently disable the mechanism.
+        await runLoop(config, workDir, 3, exitProcess);
+
+        expect(existsSync(prMarker)).toBe(true);
+        expect(exitProcess).toHaveBeenCalledTimes(1);
+        expect(exitProcess).toHaveBeenCalledWith(0);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to fetch origin/main'),
+          expect.anything(),
+        );
+      } finally {
+        consoleErrorSpy.mockRestore();
+        delete process.env.FAKE_GIT_FETCH_MAIN_FAIL_ONCE;
+      }
+    },
+  );
 });

@@ -14,6 +14,8 @@ Le process `npm start` (`src/index.ts` → `runLoop`) tourne en continu dans le 
 
 `runLoop` capture le SHA d'`origin/main` une fois au démarrage du process, puis le revérifie (`restartIfMainAdvanced`) à chaque itération de la boucle. Dès qu'`origin/main` a avancé, le process s'auto-termine (`process.exit(0)`) plutôt que de continuer sur du code potentiellement obsolète. `docker-compose.yml` porte `restart: unless-stopped` sur le service `harness` : c'est cette politique de redémarrage qui relance `npm start` et recharge le code fusionné depuis le volume monté. Aucun travail en cours n'est perdu : l'état d'une issue vit dans `.harness/state.json` (sur disque, pas en mémoire process), donc le nouveau process reprend exactement là où l'ancien s'est arrêté.
 
+Si la capture initiale du SHA échoue (`git fetch` transitoire au démarrage du conteneur), elle n'est pas abandonnée définitivement : `tryCaptureMainCommit` logue l'échec (`console.error`) et `runLoop` retente la capture à chaque itération tant qu'elle reste `null`, plutôt que de désactiver silencieusement la détection pour toute la durée de vie du process (piège repéré en review de la PR #48).
+
 ## Review Loop
 
 Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, vérifie que le check CI `lint-and-test` est vert, puis décide.

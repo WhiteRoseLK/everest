@@ -372,6 +372,22 @@ async function restartIfMainAdvanced(
   return true;
 }
 
+/**
+ * Fetches `origin/main`'s current commit, logging a warning instead of throwing if it fails (a
+ * transient network blip, e.g. right as the container comes up). Callers treat `null` as "not
+ * captured yet" and retry on a later iteration rather than giving up for the process's whole
+ * lifetime - see {@link runLoop}.
+ */
+async function tryCaptureMainCommit(cwd: string): Promise<string | null> {
+  return remoteMainCommit(cwd).catch((error: unknown) => {
+    console.error(
+      'Failed to fetch origin/main to capture the startup commit; self-restart detection stays disabled until this succeeds:',
+      error,
+    );
+    return null;
+  });
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(
   config: Config,
@@ -380,8 +396,12 @@ export async function runLoop(
   exitProcess: (code: number) => void = process.exit,
 ): Promise<void> {
   // Captured once per process, not per iteration: this is "the code currently loaded in memory",
-  // which only changes when the process itself restarts - see restartIfMainAdvanced.
-  const startupMainCommit = await remoteMainCommit(cwd).catch(() => null);
+  // which only changes when the process itself restarts - see restartIfMainAdvanced. If the
+  // initial fetch fails, it's retried lazily below on subsequent iterations rather than left
+  // permanently null - otherwise a transient blip at boot would silently disable the self-restart
+  // safety net for the process's whole lifetime, reintroducing the exact bug this loop exists to
+  // fix.
+  let startupMainCommit = await tryCaptureMainCommit(cwd);
 
   for (let i = 0; i < iterations; i += 1) {
     // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
@@ -389,6 +409,9 @@ export async function runLoop(
     // of one skipped cycle. Seen in practice: a stale local branch from a budget-exhausted
     // attempt made the next `git checkout -b` throw, killing the container.
     try {
+      if (startupMainCommit === null) {
+        startupMainCommit = await tryCaptureMainCommit(cwd);
+      }
       if (startupMainCommit && (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess))) {
         return;
       }
