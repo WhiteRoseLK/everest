@@ -51,7 +51,10 @@ if [ -n "${FAKE_CLAUDE_BUDGET_EXCEEDED:-}" ]; then
 fi
 
 echo "fake claude invoked" > /tmp/fake-claude-invoked.marker
-echo "feature output" > feature.txt
+# Appends rather than overwriting with fixed content, and includes the current commit count, so
+# repeated invocations on the same branch (retries, fixup cycles) each produce a genuinely new
+# commit instead of "nothing to commit, working tree clean" aborting the script under `set -e`.
+echo "feature output $(git rev-list --count HEAD)" >> feature.txt
 git add -A
 git commit -m "Add feature.txt" >/dev/null
 

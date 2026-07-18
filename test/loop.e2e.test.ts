@@ -60,6 +60,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP;
     delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN;
+    delete process.env.FAKE_GH_PR_EDIT_MARKER;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -297,6 +298,120 @@ describe('runLoop end-to-end', () => {
       encoding: 'utf-8',
     });
     expect(log).toContain('WIP checkpoint');
+  });
+
+  it('falls back to a bounded retry when pushing finished work fails (issue #54)', async () => {
+    // Simulates a persistent push failure on an otherwise-successful sprint - e.g. a missing
+    // `workflow` OAuth scope rejecting a push that touches `.github/workflows/*` (the concrete
+    // trigger reported in issue #54). Before the fix, this throw propagated unguarded out of
+    // handleIssue's success branch, was swallowed by runLoop's per-iteration try/catch, and left
+    // state.json untouched - the next iteration re-ran a fresh sprint on the same branch, saw
+    // nothing new to commit, commented "no new commit produced", cleared state, and picked the
+    // same issue again from scratch, forever, without ever hitting maxRetryCount.
+    writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // No PR for an unpushed branch - it falls back to the same bounded retry-with-cap semantics
+    // as the other push-failure paths, rather than crashing or looping silently.
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
+
+    // The finished-work commit itself still exists locally even though the push failed.
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('Add feature.txt');
+  });
+
+  it('escalates to needs-human after maxRetryCount repeated push failures on finished work (issue #54)', async () => {
+    writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 2,
+    };
+
+    // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
+    // runLoop iteration per sprint since a persisted state is resumed directly.
+    await runLoop(config, workDir, 3);
+
+    expect(existsSync(prMarker)).toBe(false);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('limite de 2 tentatives');
+
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('escalates a PR to needs-human when pushing a review fixup fails repeatedly (issue #54)', async () => {
+    // First review cycle: code-reviewer requests changes (needs-fixup). issue-worker's fixup
+    // commit succeeds locally, but pushing it keeps failing (e.g. the same missing `workflow`
+    // OAuth scope as issue #54) - this must escalate immediately rather than silently looping,
+    // since (unlike a brand-new sprint) retrying wouldn't redo any missing work here.
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({
+      state: 'OPEN',
+      labels: [{ name: 'needs-fixup' }],
+    });
+    // Rejects every push starting from the second one, so the initial branch push (needed to
+    // open the PR and enter the review loop in the first place) still succeeds, and only the
+    // fixup push fails.
+    const counterFile = join(tmpRoot, 'push-attempt-counter');
+    writeFileSync(
+      join(originDir, 'hooks/pre-receive'),
+      `#!/bin/sh\ncount=$(( $(cat "${counterFile}" 2>/dev/null || echo 0) + 1 ))\necho "$count" > "${counterFile}"\n[ "$count" -lt 2 ]\n`,
+      { mode: 0o755 },
+    );
+    const editMarker = join(tmpRoot, 'pr-edit-marker.txt');
+    process.env.FAKE_GH_PR_EDIT_MARKER = editMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('échec de push répété');
+
+    expect(existsSync(editMarker)).toBe(true);
+    expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
   });
 
   it('restarts the process once origin/main advances mid-run, instead of running stale code forever', async () => {
