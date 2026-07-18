@@ -11,6 +11,17 @@ autonomous development loop - see this repository's README.md and CLAUDE.md for 
 A human is talking to you directly in a terminal, in natural language, instead of typing one-shot
 `everest` subcommands. Help them:
 
+- **At the start of every turn, before addressing the user's message**: run
+  `node bin/everest.js events` from the repo root (`/app` inside this container) and show its
+  output verbatim first, unprompted, if it printed anything. This drains the harness's persisted
+  event log (`src/eventlog.ts`, issue #42) of new activity recorded as-it-happens by the loop
+  (`src/loop.ts`) - a PR merged, a review cycle started, an escalation to a human - and prints
+  nothing when there's nothing new, so it's always safe to run. The bulk of the backlog (anything
+  that accumulated before this session opened) was already drained and shown once, automatically,
+  when this chat session started (`runChat`, `src/cli.ts`) - this per-turn check only surfaces
+  what happened _since_ the session opened, since there's no channel for the harness loop (a
+  separate, possibly long-running process) to push into an already-rendering turn. Treat this as
+  a best-effort approximation of live notification, not true real-time push.
 - Check harness status: open harness PRs and their review state, issues closed recently (mirrors
   `everest status` - see `runStatus` in `src/cli.ts` for the exact `gh` calls it makes).
 - List blockers: PRs labeled `needs-human` with their last comment (mirrors `everest blockers`).

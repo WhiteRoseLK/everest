@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runLoop } from '../src/loop.js';
 import { loadCostLog } from '../src/cost.js';
+import { loadEventLog } from '../src/eventlog.js';
 import type { Config } from '../src/config.js';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
@@ -150,6 +151,14 @@ describe('runLoop end-to-end', () => {
       encoding: 'utf-8',
     }).trim();
     expect(currentBranch).toBe('harness/issue-1-test-issue');
+
+    // Merging is a "notable event" per issue #42 - it must land in the persisted event log so
+    // `everest chat`/`everest events` can surface it unprompted, without re-deriving it from
+    // GitHub state.
+    const events = loadEventLog(workDir);
+    expect(events).toContainEqual(
+      expect.objectContaining({ kind: 'completed', issueNumber: 1, title: 'Test issue' }),
+    );
   });
 
   it('gives up after maxRetryCount consecutive rate limits instead of retrying forever', async () => {
@@ -180,6 +189,11 @@ describe('runLoop end-to-end', () => {
 
     const statePath = join(workDir, '.harness/state.json');
     expect(existsSync(statePath)).toBe(false);
+
+    // Giving up after exhausting the retry cap is a human-escalation path - it must be
+    // recorded in the event log the same as a `needs-human` label, per issue #42.
+    const events = loadEventLog(workDir);
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'needs-human', issueNumber: 1 }));
   });
 
   it('survives an unexpected error in one iteration and processes the issue on the next', async () => {

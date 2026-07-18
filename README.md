@@ -22,6 +22,7 @@ node bin/everest.js ask "<message>" [--priority <critical|high|medium|low>]  # c
 node bin/everest.js status                                                   # PR ouvertes + issues fermées récemment
 node bin/everest.js blockers                                                 # PR labellisées needs-human + dernier commentaire
 node bin/everest.js catchup                                                  # résumé "qu'ai-je manqué" depuis le dernier catchup
+node bin/everest.js events                                                   # vide et affiche le backlog d'évènements non lus
 node bin/everest.js watch [--interval <ms>]                                  # poll continu (façon `watch`) des blockers/needs-fixup
 ```
 
@@ -59,6 +60,17 @@ Si le message est une liste à puces/numérotée regroupant plusieurs demandes i
 (`splitIntoTopics`), il est éclaté en autant d'issues séparées, croisées entre elles ("part of a
 split, see also #x, #y") plutôt que de rester une seule issue surdimensionnée.
 
+`events` (`src/eventlog.ts`, issue #42) vide et affiche le journal d'évènements append-only
+(`.harness/event-log.jsonl`, gitignored) que `src/loop.ts` remplit _au fil de l'eau_ - PR mergée,
+cycle `needs-fixup` démarré, escalade `needs-human` - plutôt que de le recalculer à la demande
+comme `catchup`. Un marqueur (`.harness/event-log-drained.json`) retient combien d'évènements ont
+déjà été montrés, pour qu'un second appel ne réaffiche que les nouveaux. `everest chat` en draine
+et affiche le contenu automatiquement, sans qu'on ait besoin de demander, avant même d'ouvrir la
+session interactive (le "must-do" de l'issue #42) ; l'agent `chat` relance ensuite `everest
+events` à chaque tour (voir `.claude/agents/chat.md`) pour approcher, en best-effort, une
+notification en direct pendant qu'une session est déjà ouverte - il n'existe pas de canal pour
+qu'un processus externe (la boucle du harnais) pousse dans un tour déjà en cours d'affichage.
+
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 
 ## Structure
@@ -70,5 +82,6 @@ Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans
 - `src/config.ts` — lecture/validation `.env`
 - `src/prompt.ts` — construction du prompt + instructions QA E2E
 - `src/cost.ts` — journal disque (`.harness/cost-log.jsonl`) du coût token (`total_cost_usd`) de chaque invocation, pour mesurer avant d'envisager une compression de contexte (voir issue #13)
+- `src/eventlog.ts` — journal disque append-only (`.harness/event-log.jsonl`) de l'activité notable du harnais (PR mergée, cycle `needs-fixup`, escalade `needs-human`), drainé par `everest chat`/`everest events` (issue #42)
 - `src/cli.ts` / `bin/everest.js` — CLI `everest` (voir section CLI ci-dessus)
 - `.claude/agents/chat.md` — agent interactif utilisé par `everest chat`

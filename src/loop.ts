@@ -21,6 +21,7 @@ import {
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
 import { buildPrompt, buildFixupPrompt } from './prompt.js';
+import { appendEvent } from './eventlog.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -92,6 +93,16 @@ async function runReviewLoop(
     const prState = await getPullRequestState(config.githubRepo, branch);
     if (prState === 'MERGED') {
       console.log(`PR for issue #${issue.number} merged by code-reviewer`);
+      appendEvent(
+        {
+          timestamp: new Date().toISOString(),
+          kind: 'completed',
+          issueNumber: issue.number,
+          title: issue.title,
+          description: 'PR merged by code-reviewer',
+        },
+        cwd,
+      );
       return;
     }
 
@@ -105,6 +116,16 @@ async function runReviewLoop(
 
     console.log(
       `Review cycle ${cycle + 1}/${config.maxReviewCycles}: changes requested for issue #${issue.number}, re-invoking issue-worker`,
+    );
+    appendEvent(
+      {
+        timestamp: new Date().toISOString(),
+        kind: 'needs-fixup',
+        issueNumber: issue.number,
+        title: issue.title,
+        description: `review cycle ${cycle + 1}/${config.maxReviewCycles}: code-reviewer requested changes`,
+      },
+      cwd,
     );
     const fixup = await runClaudeCode(
       buildFixupPrompt(branch, cwd),
@@ -125,6 +146,16 @@ async function runReviewLoop(
     `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
   );
   await markPullRequestNeedsHuman(config.githubRepo, branch);
+  appendEvent(
+    {
+      timestamp: new Date().toISOString(),
+      kind: 'needs-human',
+      issueNumber: issue.number,
+      title: issue.title,
+      description: `review cycles exhausted (${config.maxReviewCycles}) without approval`,
+    },
+    cwd,
+  );
 }
 
 /**
@@ -151,6 +182,16 @@ async function retryFreshSprintOrGiveUp(
       config.githubRepo,
       issue,
       `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+    );
+    appendEvent(
+      {
+        timestamp: new Date().toISOString(),
+        kind: 'needs-human',
+        issueNumber: issue.number,
+        title: issue.title,
+        description: `${reason} across ${config.maxRetryCount} sprints, giving up`,
+      },
+      cwd,
     );
     clearState(cwd);
     return;
@@ -212,6 +253,16 @@ async function handleIssue(
         config.githubRepo,
         issue,
         `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
+      );
+      appendEvent(
+        {
+          timestamp: new Date().toISOString(),
+          kind: 'needs-human',
+          issueNumber: issue.number,
+          title: issue.title,
+          description: `hit the rate-limit retry cap (${config.maxRetryCount}), giving up`,
+        },
+        cwd,
       );
       clearState(cwd);
       return;
@@ -285,6 +336,16 @@ async function handleIssue(
       config.githubRepo,
       issue,
       `Le harnais n'a pas pu traiter cette issue automatiquement : ${result.errorSummary}`,
+    );
+    appendEvent(
+      {
+        timestamp: new Date().toISOString(),
+        kind: 'needs-human',
+        issueNumber: issue.number,
+        title: issue.title,
+        description: `failed to process automatically: ${result.errorSummary}`,
+      },
+      cwd,
     );
     console.log(`Failed to process issue #${issue.number}: ${result.errorSummary}`);
   }
