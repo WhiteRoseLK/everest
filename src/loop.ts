@@ -324,12 +324,24 @@ async function handleIssue(
 
     await runReviewLoop(issue, branch, config, cwd);
   } else {
-    await commentOnIssue(
-      config.githubRepo,
-      issue,
-      `Le harnais n'a pas pu traiter cette issue automatiquement : ${result.errorSummary}`,
-    );
+    // Bounded by maxRetryCount via retryFreshSprintOrGiveUp instead of unconditionally
+    // commenting and clearing state on every single failure: this branch also covers
+    // "no new commit produced" (see runClaudeCode in claude.ts), which the agent can hit
+    // repeatedly on the same issue (e.g. it keeps exploring without ever committing). Clearing
+    // state unconditionally here reset retryCount to 0 every time, so the loop re-picked the
+    // same issue, recreated the branch from scratch, and repeated the same "no new commit
+    // produced" comment forever without ever reaching maxRetryCount or giving up - see issue
+    // #57 (a recurrence of the same class of bug as #54's push-failure case).
     console.log(`Failed to process issue #${issue.number}: ${result.errorSummary}`);
+    await retryFreshSprintOrGiveUp(
+      issue,
+      branch,
+      config,
+      cwd,
+      retryCount,
+      `failed to process (${result.errorSummary})`,
+    );
+    return;
   }
 
   clearState(cwd);

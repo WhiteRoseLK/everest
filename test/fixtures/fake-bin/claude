@@ -50,6 +50,17 @@ if [ -n "${FAKE_CLAUDE_BUDGET_EXCEEDED:-}" ]; then
   exit 0
 fi
 
+if [ -n "${FAKE_CLAUDE_NO_COMMIT:-}" ]; then
+  # Simulates issue-worker reporting success without ever committing anything (e.g. it explored
+  # the issue but concluded there was nothing to change) - runClaudeCode (src/claude.ts) turns
+  # this into a "no new commit produced" failure. Used to test that handleIssue (src/loop.ts)
+  # bounds retries on this path via retryFreshSprintOrGiveUp instead of giving up unconditionally
+  # after a single attempt (issue #57).
+  echo "fake claude invoked (no commit produced)" >> /tmp/fake-claude-invoked.marker
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"nothing to do","total_cost_usd":0.01}'
+  exit 0
+fi
+
 echo "fake claude invoked" > /tmp/fake-claude-invoked.marker
 # Appends rather than overwriting with fixed content, and includes the current commit count, so
 # repeated invocations on the same branch (retries, fixup cycles) each produce a genuinely new
