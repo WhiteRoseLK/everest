@@ -58,6 +58,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_CLAUDE_RATE_LIMITED;
     delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED;
     delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP;
+    delete process.env.FAKE_CLAUDE_NO_COMMIT;
     delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN;
     delete process.env.FAKE_GH_PR_EDIT_MARKER;
@@ -342,6 +343,69 @@ describe('runLoop end-to-end', () => {
 
   it('escalates to needs-human after maxRetryCount repeated push failures on finished work (issue #54)', async () => {
     writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 2,
+    };
+
+    // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
+    // runLoop iteration per sprint since a persisted state is resumed directly.
+    await runLoop(config, workDir, 3);
+
+    expect(existsSync(prMarker)).toBe(false);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('limite de 2 tentatives');
+
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('retries with a fresh sprint when the agent reports success but produces no commit (issue #57)', async () => {
+    process.env.FAKE_CLAUDE_NO_COMMIT = '1';
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // No PR for a branch with no new commit - it falls back to the same bounded retry-with-cap
+    // semantics as the other failure paths, on the same branch, rather than clearing state and
+    // letting the next iteration recreate the branch from scratch with retryCount reset to 0.
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(true);
+    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+    expect(state.retryCount).toBe(1);
+    expect(state.branch).toBe('harness/issue-1-test-issue');
+  });
+
+  it('escalates to needs-human after maxRetryCount repeated "no new commit" sprints (issue #57)', async () => {
+    // Before the fix, this generic failure path unconditionally commented and cleared state on
+    // every single sprint instead of routing through retryFreshSprintOrGiveUp - so the loop kept
+    // re-picking the issue, recreating the branch from scratch (retryCount always 0), and
+    // repeating the same "no new commit produced" comment forever, never reaching maxRetryCount
+    // or giving up. Reported in production on issue #47: 4 repeats in 13 minutes.
+    process.env.FAKE_CLAUDE_NO_COMMIT = '1';
 
     const config: Config = {
       githubRepo: 'fake/repo',

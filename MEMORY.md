@@ -59,12 +59,13 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   plutôt que de forcer un shell-out `claude -p` coûteux pour le seul chemin CLI non-interactif, qui
   garde l'heuristique (améliorée : filler-stripping) comme fallback raisonnable.
 
-- 2026-07-18 (issue #54) : tout `pushBranch` dans `src/loop.ts` doit être dans un `try/catch` —
-  un push non protégé qui throw (ex: scope OAuth `workflow` manquant sur un push touchant
-  `.github/workflows/*`) remonte jusqu'au try/catch générique de `runLoop`, qui logue et continue
-  sans toucher `.harness/state.json` : le sprint suivant repart de zéro sur la même branche, ne
-  voit "rien à committer", commente puis efface l'état — boucle infinie sans jamais atteindre
-  `maxRetryCount` ni poser `needs-human`. Le push du travail terminé passe par
-  `retryFreshSprintOrGiveUp` (comme le checkpoint WIP) ; le push d'un fixup de review (PR déjà
-  ouverte, rejouer le sprint n'aiderait pas) escalade directement en commentaire +
-  `markPullRequestNeedsHuman`.
+- 2026-07-18 (issues #54, #57) : dans `handleIssue` (`src/loop.ts`), **tout** chemin d'échec doit
+  passer par `retryFreshSprintOrGiveUp` (jamais `commentOnIssue` + `clearState` directement) — sinon
+  `retryCount` repart à 0 au sprint suivant sur la même issue et le harnais boucle indéfiniment sans
+  jamais atteindre `maxRetryCount` ni poser `needs-human`. Repéré deux fois avec le même
+  symptôme : #54 (un `pushBranch` non protégé par `try/catch` qui throw, ex. scope OAuth `workflow`
+  manquant, remontait jusqu'au try/catch générique de `runLoop` sans toucher `.harness/state.json`)
+  et #57 (l'échec générique "no new commit produced" dans `handleIssue` commentait et clearState
+  inconditionnellement, sans jamais appeler `retryFreshSprintOrGiveUp`). Le push d'un fixup de
+  review (PR déjà ouverte, rejouer le sprint n'aiderait pas) reste l'exception : il escalade
+  directement en commentaire + `markPullRequestNeedsHuman`.
