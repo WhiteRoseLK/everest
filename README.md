@@ -21,6 +21,7 @@ node bin/everest.js chat                                                     # i
 node bin/everest.js ask "<message>" [--priority <critical|high|medium|low>]  # crée une issue
 node bin/everest.js status                                                   # PR ouvertes + issues fermées récemment
 node bin/everest.js blockers                                                 # PR labellisées needs-human + dernier commentaire
+node bin/everest.js catchup                                                  # résumé "qu'ai-je manqué" depuis le dernier catchup
 node bin/everest.js watch [--interval <ms>]                                  # poll continu (façon `watch`) des blockers/needs-fixup
 ```
 
@@ -40,6 +41,15 @@ sur l'hôte. Nécessite donc `docker`/`docker compose` disponibles localement, e
 de review (`needs-fixup`), sans qu'il faille relancer `blockers` à la main. Réutilise
 `listBlockers`/`listHarnessPullRequests` (`src/github.ts`), pas de nouveau service - juste un
 intervalle de poll côté CLI, comme `pollIntervalMs` dans `src/loop.ts`.
+
+`catchup` (`buildCatchupSummary`, `src/catchup.ts`) donne un résumé façon "équipe" - issues
+fermées/ouvertes, PR en cours de review (`needs-fixup`) - depuis le dernier `catchup`, et se
+termine toujours par un signal explicite ("Nothing needs you right now." ou "⚠️ Needs you: ...").
+Contrairement à `status` (fenêtre fixe de 24h), la fenêtre est ancrée sur un horodatage persisté
+(`.harness/catchup-last-seen.json`, gitignored, mis à jour à chaque appel) - donc "depuis la
+dernière fois que tu as vérifié", pas une fenêtre glissante arbitraire. L'agent `chat` déclenche
+aussi ce résumé de façon proactive quand on lui demande "qu'ai-je manqué"/"where are we", sans
+attendre le nom exact de la sous-commande (voir `.claude/agents/chat.md`).
 
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 

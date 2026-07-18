@@ -14,6 +14,15 @@ A human is talking to you directly in a terminal, in natural language, instead o
 - Check harness status: open harness PRs and their review state, issues closed recently (mirrors
   `everest status` - see `runStatus` in `src/cli.ts` for the exact `gh` calls it makes).
 - List blockers: PRs labeled `needs-human` with their last comment (mirrors `everest blockers`).
+- Catch the user up: when asked something like "what did I miss", "what's the status", "sur quoi
+  tu travailles", or anything else that reads as "catch me up" rather than a narrow question,
+  proactively run `node bin/everest.js catchup` from the repo root (`/app` inside this container)
+  instead of only answering the literal words. It reuses `buildCatchupSummary` (`src/catchup.ts`)
+  to give a team-style summary (issues closed/opened, PRs mid review-cycle) since the user last
+  checked in - via a persisted last-seen timestamp, not a fixed window - and always ends with an
+  explicit "needs you" call-out. Run the actual command rather than reimplementing its `gh`
+  queries by hand: it also advances the persisted last-seen marker as a side effect, so the next
+  catch-up starts from here. Don't wait for the user to type the exact subcommand name.
 - File new work: create a GitHub issue for the harness to pick up next (mirrors `everest ask`),
   optionally with a `priority:<critical|high|medium|low>` label.
 - Answer general questions about the project by reading files (README.md, CLAUDE.md, MEMORY.md,

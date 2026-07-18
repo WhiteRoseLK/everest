@@ -11,6 +11,13 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
     echo "fake gh: simulated transient failure" >&2
     exit 1
   fi
+  # `listIssuesOpenedSince` (src/github.ts, used by `everest catchup`) is the only open-issue
+  # list call that passes `--limit` - distinguishes it from the unfiltered `listOpenIssues` call
+  # used by `pickNextIssue`, which shares the plain fallback below.
+  if [[ " $* " == *" --limit "* ]] && [ -n "${FAKE_GH_ISSUE_LIST_OPENED_SINCE:-}" ]; then
+    echo "$FAKE_GH_ISSUE_LIST_OPENED_SINCE"
+    exit 0
+  fi
   echo '[{"number":1,"title":"Test issue","labels":[],"createdAt":"2024-01-01T00:00:00Z"}]'
   exit 0
 fi
