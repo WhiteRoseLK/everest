@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main, runWatch, runChat, runCatchup } from '../src/cli.js';
+import { main, runWatch, runChat, runCatchup, runEvents } from '../src/cli.js';
+import { appendEvent } from '../src/eventlog.js';
 
 const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
 const DOCKER_COMPOSE_UP_MARKER = '/tmp/fake-docker-compose-up.marker';
@@ -137,6 +138,72 @@ describe('everest CLI end-to-end', () => {
     await main([]);
 
     expect(existsSync(CHAT_MARKER)).toBe(true);
+  });
+
+  it('chat drains and prints any backlog from the event log before opening the session', () => {
+    appendEvent(
+      {
+        timestamp: '2026-07-18T00:00:00Z',
+        kind: 'completed',
+        issueNumber: 12,
+        title: 'Add dark mode',
+        description: 'PR merged by code-reviewer',
+      },
+      tmpRoot,
+    );
+
+    runChat('fake/repo', tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('While you were away:');
+    expect(output).toContain('issue #12 "Add dark mode"');
+    // The session still opened normally after the backlog was shown.
+    expect(existsSync(CHAT_MARKER)).toBe(true);
+  });
+
+  it('chat does not re-print an already-drained backlog on a second session', () => {
+    appendEvent(
+      {
+        timestamp: '2026-07-18T00:00:00Z',
+        kind: 'completed',
+        issueNumber: 12,
+        title: 'Add dark mode',
+        description: 'PR merged by code-reviewer',
+      },
+      tmpRoot,
+    );
+
+    runChat('fake/repo', tmpRoot);
+    logSpy.mockClear();
+
+    runChat('fake/repo', tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).not.toContain('While you were away');
+  });
+
+  it('everest events drains and prints the event log backlog', () => {
+    appendEvent(
+      {
+        timestamp: '2026-07-18T00:00:00Z',
+        kind: 'needs-human',
+        issueNumber: 9,
+        title: 'Flaky test',
+        description: 'review cycles exhausted (3) without approval',
+      },
+      tmpRoot,
+    );
+
+    runEvents(tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('issue #9 "Flaky test"');
+  });
+
+  it('everest events prints nothing when there is no new backlog', () => {
+    runEvents(tmpRoot);
+
+    expect(logSpy).not.toHaveBeenCalled();
   });
 
   it('status lists open harness PRs with their derived state and recently closed issues', async () => {

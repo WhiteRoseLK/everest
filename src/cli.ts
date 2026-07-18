@@ -9,6 +9,7 @@ import {
   listBlockers,
 } from './github.js';
 import { buildCatchupSummary, type CatchupSummary } from './catchup.js';
+import { drainEvents, formatEvents } from './eventlog.js';
 
 /** Lookback window used by `everest status` when reporting recently closed issues. */
 const RECENT_ISSUES_WINDOW_HOURS = 24;
@@ -33,6 +34,7 @@ function printUsage(): void {
       '  everest status',
       '  everest blockers',
       '  everest catchup',
+      '  everest events',
       '  everest watch [--interval <ms>]',
     ].join('\n'),
   );
@@ -158,6 +160,17 @@ export async function runCatchup(repo: string, cwd: string = REPO_ROOT): Promise
 }
 
 /**
+ * Handles `everest events`: drains and prints any harness event-log entries (`src/eventlog.ts`)
+ * appended since the last drain - issue closed/PR merged, needs-fixup cycles started, needs-human
+ * escalations - recorded as-they-happen by `src/loop.ts` rather than recomputed on demand like
+ * `everest catchup`. Prints nothing when there is nothing new, so it's safe to run unconditionally
+ * (see `runChat`'s drain-on-open, and `.claude/agents/chat.md`'s per-turn check - issue #42).
+ */
+export function runEvents(cwd: string = REPO_ROOT): void {
+  for (const line of formatEvents(drainEvents(cwd))) console.log(line);
+}
+
+/**
  * Renders one `everest watch` snapshot: blockers (`needs-human`) plus PRs still going through the
  * `needs-fixup` review loop. Reuses `listBlockers`/`listHarnessPullRequests` (`src/github.ts`)
  * rather than a dedicated watch-specific GitHub query.
@@ -257,8 +270,17 @@ function ensureHarnessContainer(cwd: string): void {
  * mode plus blanket permission bypass is a package deal confined to the container, and `-it`
  * makes this an interactive TTY session rather than headless, but the confinement is what makes
  * bypassing approval prompts acceptable, not the human's presence at the keyboard).
+ *
+ * Before opening the session, drains the harness event log (`src/eventlog.ts`, issue #42) and
+ * prints any backlog unprompted - the very first thing shown, ahead of the interactive session
+ * itself - rather than relying on the `chat` agent to remember to check. This is the "must-do"
+ * half of #42; the "best-effort while a session is already open" half is handled per-turn by
+ * `.claude/agents/chat.md` running `everest events` (same drain primitive) at the start of every
+ * turn, since there's no channel for an external process to push into an already-rendering turn.
  */
 export function runChat(repo: string, cwd: string = REPO_ROOT): number {
+  for (const line of formatEvents(drainEvents(cwd))) console.log(line);
+
   const systemPromptAppend =
     `You are "everest chat", the conversational interface for the everest harness in ` +
     `repository ${repo}. Use the gh CLI (already authenticated, scoped to --repo ${repo}) to ` +
@@ -267,7 +289,11 @@ export function runChat(repo: string, cwd: string = REPO_ROOT): number {
     `'everest status', 'everest blockers' and 'everest ask'. When asked something like "what did ` +
     `I miss" or "what's the status", proactively run 'node bin/everest.js catchup' (from /app) ` +
     `instead of just answering literally - it gives a team-style summary since the user last ` +
-    `checked in and always ends with an explicit "needs you" call-out. Keep answers short and ` +
+    `checked in and always ends with an explicit "needs you" call-out. At the start of every ` +
+    `turn (before addressing the user's message), run 'node bin/everest.js events' (from /app) ` +
+    `and show any output verbatim first, unprompted - it drains the harness's event log of new ` +
+    `activity (PR merged, review cycle started, escalated to a human) that happened since the ` +
+    `last check, and prints nothing when there is nothing new. Keep answers short and ` +
     `terminal-friendly.`;
 
   ensureHarnessContainer(cwd);
@@ -336,6 +362,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'catchup':
       await runCatchup(config.githubRepo);
+      break;
+    case 'events':
+      runEvents();
       break;
     case 'watch':
       await runWatch(config.githubRepo, parseIntervalFlag(rest, config.watchPollIntervalMs));
