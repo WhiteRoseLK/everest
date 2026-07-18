@@ -52,6 +52,7 @@ const RATE_LIMIT_PATTERNS = [
   'rate limit',
   'usage_limit',
   'usage limit',
+  'session limit',
   '429',
   'too many requests',
 ];

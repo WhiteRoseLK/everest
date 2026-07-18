@@ -53,6 +53,20 @@ describe('isRateLimitError', () => {
     expect(isRateLimitError(parsed, '')).toBe(true);
   });
 
+  it('detects a session-limit message even when subtype is "success" (issue #50)', () => {
+    // Observed in prod: claude -p can report is_error: true with subtype: 'success' when the
+    // session (not API-request) usage limit is hit, with the limit phrased as "session limit"
+    // rather than "usage limit" or a bare rate_limit/429 code.
+    const parsed = {
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: "You've hit your session limit · resets 3pm (UTC)",
+    };
+
+    expect(isRateLimitError(parsed, '')).toBe(true);
+  });
+
   it('is case-insensitive', () => {
     const parsed = { type: 'result', subtype: 'error', is_error: true, errors: ['RATE_LIMIT'] };
 
@@ -85,6 +99,19 @@ describe('shouldCheckRateLimit', () => {
 
   it('returns true when the run errored', () => {
     const parsed = { type: 'result', subtype: 'error', is_error: true };
+
+    expect(shouldCheckRateLimit(parsed)).toBe(true);
+  });
+
+  it('returns true for a session-limit error reported with subtype "success" (issue #50)', () => {
+    // is_error is what gates the check, not subtype - a session limit can be reported with
+    // subtype: 'success' alongside is_error: true.
+    const parsed = {
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: "You've hit your session limit · resets 3pm (UTC)",
+    };
 
     expect(shouldCheckRateLimit(parsed)).toBe(true);
   });
