@@ -29,7 +29,7 @@ function printUsage(): void {
       'Usage:',
       '  everest                                          (same as `everest chat`)',
       '  everest chat',
-      '  everest ask "<message>" [--priority <critical|high|medium|low>]',
+      '  everest ask "<message>" [--priority <critical|high|medium|low>] [--title "<title>"]',
       '  everest status',
       '  everest blockers',
       '  everest catchup',
@@ -42,14 +42,22 @@ function printUsage(): void {
  * Handles `everest ask`: files one or more GitHub issues for the harness to pick up, via
  * {@link createIssuesFromMessage} (title/label inference plus multi-topic splitting — see issue
  * #38) rather than a bare title/body dump. `--priority` still overrides the inferred urgency
- * label when passed.
+ * label when passed. `--title` overrides the derived-by-truncation title with one supplied by the
+ * caller — the heuristic in {@link deriveIssueTitle} is not real summarization (see issue #44),
+ * so a caller with actual judgment available (e.g. the `chat` agent, briefed to compose a
+ * concise title itself before invoking this command) should pass one explicitly instead of
+ * relying on it.
  */
 async function runAsk(args: string[], repo: string): Promise<void> {
   let priority: string | undefined;
+  let title: string | undefined;
   const messageParts: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     if (args[i] === '--priority') {
       priority = args[i + 1];
+      i += 1;
+    } else if (args[i] === '--title') {
+      title = args[i + 1];
       i += 1;
     } else {
       messageParts.push(args[i]);
@@ -60,7 +68,7 @@ async function runAsk(args: string[], repo: string): Promise<void> {
     throw new Error('everest ask requires a message, e.g. everest ask "add dark mode"');
   }
 
-  const created = await createIssuesFromMessage(repo, message, priority);
+  const created = await createIssuesFromMessage(repo, message, priority, title);
   if (created.length === 1) {
     console.log(`Issue created: ${created[0].url}`);
   } else {
