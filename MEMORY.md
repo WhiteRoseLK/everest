@@ -25,45 +25,39 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 ## Entrées
 
-- 2026-07-17 (PR #22) : les commits du harnais (`commitWorkInProgress`) ne passent par aucun hook
-  Claude Code, mais `git push` déclenche quand même le hook Husky `pre-push` (lint+test) quel que
-  soit l'appelant. Un push volontairement incomplet doit utiliser `--no-verify` explicitement
-  (`pushBranch(..., { noVerify: true })`), sinon l'échec non géré peut boucler indéfiniment sans
-  avancer `retryCount`.
+- 2026-07-17 (issue #24) : `eslint.config.js` n'active le handling globals Node que pour `**/*.ts`
+  — un `.js` ajouté ailleurs (ex: `bin/everest.js`) se fait flaguer `'process' is not defined`.
+  Rester en `.ts`, ou ajouter un bloc `languageOptions.globals` dédié.
 
-- 2026-07-17 (issue #24) : `eslint.config.js` n'active le handling globals Node que pour
-  `**/*.ts` (`tseslint.configs.recommended`) — un `.js` ajouté ailleurs (ex: `bin/everest.js`)
-  tombe sous `js.configs.recommended` nu et se fait flaguer `'process' is not defined`. Rester en
-  `.ts`, ou ajouter un bloc `languageOptions.globals` dédié (voir `files: ['bin/**/*.js']`).
-
-- 2026-07-17 (issue #33) : pour tester un `spawnSync('docker', ['compose', 'exec', ...])` sans
-  Docker réel, le fake binaire `test/fixtures/fake-bin/docker` strippe les args jusqu'au token
-  `claude` puis `exec`-délègue au fake `claude` déjà sur le `PATH` - évite de dupliquer toute la
-  logique de simulation (markers, `FAKE_CLAUDE_CHAT_EXIT_CODE`, etc.) déjà écrite dans le fake
-  `claude`. Pattern réutilisable pour tout futur wrapper qui invoque une commande via un niveau
-  d'indirection supplémentaire (ici `docker compose exec` autour de `claude`).
+- 2026-07-17 (issue #33) : pour tester un wrapper qui invoque une commande via un niveau
+  d'indirection (ex: `spawnSync('docker', ['compose', 'exec', ..., 'claude', ...])`), le fake
+  binaire peut strip les args jusqu'au token de la commande finale puis `exec`-déléguer au fake
+  déjà sur le `PATH`, plutôt que dupliquer sa logique de simulation (voir
+  `test/fixtures/fake-bin/docker`).
 
 - 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
-  `issue-worker` (self-improvement) et `everest ask` créent tous deux des issues sous le même
-  compte `GH_TOKEN` (voir "Agent Identities" dans CLAUDE.md). `listIssuesOpenedSince`
-  (`src/github.ts`, utilisé par `everest catchup` / `src/catchup.ts`) liste donc tout ce qui a été
-  ouvert dans la fenêtre sans prétendre attribuer l'auteur. Pattern d'état persistant réutilisable
-  pour tout futur "depuis la dernière fois" : `.harness/<nom>.json` (gitignored), écrit après
-  lecture, jamais une fenêtre glissante fixe codée en dur.
+  `issue-worker` et `everest ask` créent tous deux des issues sous le même compte `GH_TOKEN`.
+  Pattern d'état persistant réutilisable pour tout futur "depuis la dernière fois" :
+  `.harness/<nom>.json` (gitignored), écrit après lecture, jamais une fenêtre glissante fixe codée
+  en dur (voir `listIssuesOpenedSince`/`src/catchup.ts`).
 
-- 2026-07-18 (issue #39) : `git add -A -- . ':!.harness'` échoue avec "paths are ignored by one
-  of your .gitignore files" dès que `.harness/` est effectivement listé dans `.gitignore` — git
-  traite un pathspec de négation (`:!chemin`) comme une référence explicite au chemin dès que ce
-  chemin est ignoré, même si l'intention est de l'exclure, pas de l'ajouter. Ça avait cassé
-  `commitWorkInProgress` en prod (checkpoint WIP après `budgetExceeded`) une fois `.harness`
-  effectivement ajouté à `.gitignore`. Fix : `git add -A -- .` (laisse `.gitignore` faire son
-  travail normalement) puis `git reset -- .harness` en filet de sécurité si `.gitignore` est
-  absent/mal configuré (`git reset` n'échoue pas sur un chemin jamais indexé). Généraliser : ne
-  jamais combiner un pathspec de négation avec un chemin déjà couvert par `.gitignore`.
+- 2026-07-18 (issue #39) : ne jamais combiner un pathspec de négation (`:!chemin`) avec un chemin
+  déjà couvert par `.gitignore` — git le traite comme une référence explicite et échoue ("paths
+  are ignored..."). `commitWorkInProgress` (`src/github.ts`) fait `git add -A -- .` (laisse
+  `.gitignore` opérer normalement) puis `git reset -- .harness` en filet de sécurité.
 
 - 2026-07-18 (issue #38) : en démarrant sur une branche `harness/issue-<n>-...`, vérifier `git
 status`/`git diff --cached` avant d'écrire quoi que ce soit — un sprint précédent peut avoir
-  laissé du travail déjà `git add`é mais jamais committé (interrompu avant le commit, ex. budget
-  épuisé pile avant `commitWorkInProgress`, ou un plantage). Si ce qui est déjà staged est correct
-  et complet (relire le diff, faire tourner `npm test`/`npm run lint` dessus), le vérifier puis le
+  laissé du travail déjà `git add`é mais jamais committé (interrompu avant le commit). Si ce qui
+  est déjà staged est correct et complet (relire le diff, `npm test`/`npm run lint` dessus), le
   committer directement plutôt que de le refaire depuis zéro.
+
+- 2026-07-18 (issue #43) : `npm start` (src/index.ts) ne recharge jamais son propre code une fois
+  démarré — ESM n'importe un module qu'une fois par process, donc `git pull` seul (déjà fait par
+  `checkoutMain()`) ne change rien au comportement en mémoire. Fix : `runLoop` capture le SHA
+  d'`origin/main` au démarrage et le revérifie à chaque itération (`restartIfMainAdvanced`,
+  `src/loop.ts`) ; dès qu'il a avancé, le process s'auto-exit (`process.exit(0)`) et
+  `restart: unless-stopped` (`docker-compose.yml`) relance `npm start` avec le code neuf. Rien
+  n'est perdu : l'état d'issue en cours vit dans `.harness/state.json`. Pour tester ça sans tuer
+  le process vitest, `runLoop` prend un paramètre `exitProcess` injectable (mock `vi.fn()` en
+  test, `process.exit` par défaut) plutôt que d'appeler `process.exit` en dur.

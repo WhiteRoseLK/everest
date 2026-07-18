@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,6 +59,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED;
     delete process.env.FAKE_CLAUDE_BUDGET_EXCEEDED_WITH_WIP;
     delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
+    delete process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -68,6 +69,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
@@ -129,6 +131,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 100,
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
@@ -157,6 +160,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 1,
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
@@ -188,6 +192,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 1,
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
@@ -209,6 +214,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 1,
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
@@ -237,6 +243,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 1,
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
@@ -267,6 +274,7 @@ describe('runLoop end-to-end', () => {
       maxBudgetUsdPerIssue: 1,
       maxBudgetUsdPerReview: 1,
       maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
       pollIntervalMs: 1,
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
@@ -289,5 +297,36 @@ describe('runLoop end-to-end', () => {
       encoding: 'utf-8',
     });
     expect(log).toContain('WIP checkpoint');
+  });
+
+  it('restarts the process once origin/main advances mid-run, instead of running stale code forever', async () => {
+    // The fake claude binary pushes a new commit straight to origin/main as a side effect,
+    // simulating a concurrent merge (e.g. code-reviewer merging a different issue's PR) while
+    // this sprint runs - see issue #43: the harness never reloads its own already-imported
+    // modules, so it must notice origin/main moved and exit for the container to restart it.
+    process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN = '1';
+    const exitProcess = vi.fn();
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // Iteration 1 processes issue #1 end to end (origin/main advances as a side effect along
+    // the way). Iteration 2's restart check must catch that before doing any further work -
+    // 3 iterations gives it room to prove no further processing happens once exitProcess is
+    // called (exitProcess is a mock here, so it doesn't actually terminate the test process).
+    await runLoop(config, workDir, 3, exitProcess);
+
+    expect(existsSync(prMarker)).toBe(true);
+    expect(exitProcess).toHaveBeenCalledTimes(1);
+    expect(exitProcess).toHaveBeenCalledWith(0);
   });
 });

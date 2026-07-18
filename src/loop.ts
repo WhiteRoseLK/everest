@@ -15,6 +15,7 @@ import {
   findResumablePullRequest,
   markPullRequestNeedsHuman,
   commitWorkInProgress,
+  remoteMainCommit,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -343,14 +344,54 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
   await handleIssue(issue, state, config, cwd);
 }
 
+/**
+ * Checks whether `origin/main` has advanced past `startupMainCommit` and, if so, exits the
+ * process via `exitProcess` (real usage: `process.exit`, injected as a mock in tests). The
+ * harness never reloads its own modules mid-run - Node's ESM loader caches each module the
+ * first time it's imported, so `git pull` alone (already done by {@link checkoutMain} on every
+ * new issue) updates the files on disk but not the code actually executing in memory. Left
+ * unaddressed, a merge produced by code-reviewer (including one fixing a bug in the harness
+ * itself) would silently keep running under the old, buggy code indefinitely - see issue #43,
+ * where this happened in practice with the fix from #39. Exiting relies on the container's
+ * restart policy (`restart: unless-stopped` in docker-compose.yml) to relaunch `npm start` with
+ * the merged code from the bind-mounted source tree. No in-flight progress is lost: an issue's
+ * state lives in `.harness/state.json` (see state.ts), on disk rather than in process memory, so
+ * the next process picks up exactly where this one left off.
+ */
+async function restartIfMainAdvanced(
+  cwd: string,
+  startupMainCommit: string,
+  exitProcess: (code: number) => void,
+): Promise<boolean> {
+  const latest = await remoteMainCommit(cwd);
+  if (latest === startupMainCommit) return false;
+  console.log(
+    `origin/main advanced from ${startupMainCommit} to ${latest}; exiting so the container can restart with fresh code`,
+  );
+  exitProcess(0);
+  return true;
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
-export async function runLoop(config: Config, cwd: string, iterations = Infinity): Promise<void> {
+export async function runLoop(
+  config: Config,
+  cwd: string,
+  iterations = Infinity,
+  exitProcess: (code: number) => void = process.exit,
+): Promise<void> {
+  // Captured once per process, not per iteration: this is "the code currently loaded in memory",
+  // which only changes when the process itself restarts - see restartIfMainAdvanced.
+  const startupMainCommit = await remoteMainCommit(cwd).catch(() => null);
+
   for (let i = 0; i < iterations; i += 1) {
     // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
     // never take down the whole process - that turns one bad issue into total downtime instead
     // of one skipped cycle. Seen in practice: a stale local branch from a budget-exhausted
     // attempt made the next `git checkout -b` throw, killing the container.
     try {
+      if (startupMainCommit && (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess))) {
+        return;
+      }
       await runIteration(config, cwd);
     } catch (error) {
       console.error('Unhandled error during loop iteration, continuing after a short delay:');

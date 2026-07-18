@@ -8,6 +8,12 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 `src/loop.ts` lit les issues ouvertes (FIFO, `priority:high` en premier), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
 
+### Auto-redémarrage du process (issue #43)
+
+Le process `npm start` (`src/index.ts` → `runLoop`) tourne en continu dans le conteneur et ne recharge jamais son propre code : ESM ne charge un module qu'une seule fois par process, donc un `git pull` (fait par `checkoutMain()` avant chaque nouvelle issue) met à jour les fichiers sur disque mais pas le code déjà importé en mémoire. Sans mécanisme dédié, un merge sur `main` — y compris un fix du harnais lui-même — continuerait de tourner sous l'ancien code jusqu'à un redémarrage manuel du conteneur (constaté concrètement avec le fix #39, qui ne s'est appliqué qu'après `docker compose restart`).
+
+`runLoop` capture le SHA d'`origin/main` une fois au démarrage du process, puis le revérifie (`restartIfMainAdvanced`) à chaque itération de la boucle. Dès qu'`origin/main` a avancé, le process s'auto-termine (`process.exit(0)`) plutôt que de continuer sur du code potentiellement obsolète. `docker-compose.yml` porte `restart: unless-stopped` sur le service `harness` : c'est cette politique de redémarrage qui relance `npm start` et recharge le code fusionné depuis le volume monté. Aucun travail en cours n'est perdu : l'état d'une issue vit dans `.harness/state.json` (sur disque, pas en mémoire process), donc le nouveau process reprend exactement là où l'ancien s'est arrêté.
+
 ## Review Loop
 
 Une fois la PR ouverte, `code-reviewer` (`.claude/agents/code-reviewer.md`) est invoqué sur la branche : il checkout, lance lui-même `npm run lint`/`npm test` (ne fait pas confiance au diff seul), lit le diff, vérifie que le check CI `lint-and-test` est vert, puis décide.
