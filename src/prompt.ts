@@ -17,13 +17,20 @@ const MAX_MEMORY_CHARS = 4000;
  * recurring patterns, and decisions from past runs, committed to the repo like any other file.
  * Returns an empty string when the file is missing or empty, so callers can concatenate the
  * result unconditionally.
+ *
+ * New entries are always appended at the end of `MEMORY.md` (see "Comment contribuer une entrée"
+ * in the file itself), so when the content exceeds the size cap, the *oldest* material lives at
+ * the start of the file and the most recently learned lessons live at the end. Truncation must
+ * therefore drop from the start and keep the tail, otherwise every agent invocation would see
+ * only stale entries and never the newest ones (issue #45).
  */
 export function readMemory(cwd: string): string {
   const path = join(cwd, MEMORY_FILE);
   if (!existsSync(path)) return '';
   const content = readFileSync(path, 'utf-8').trim();
   if (content.length <= MAX_MEMORY_CHARS) return content;
-  return `${content.slice(0, MAX_MEMORY_CHARS)}\n[...tronqué, ${MEMORY_FILE} dépasse ${MAX_MEMORY_CHARS} caractères - pensez à l'élaguer...]`;
+  const tail = content.slice(content.length - MAX_MEMORY_CHARS);
+  return `[...début de ${MEMORY_FILE} tronqué, le fichier dépasse ${MAX_MEMORY_CHARS} caractères - pensez à l'élaguer...]\n${tail}`;
 }
 
 /**
