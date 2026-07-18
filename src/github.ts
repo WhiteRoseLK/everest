@@ -216,6 +216,19 @@ export async function currentCommit(cwd: string): Promise<string> {
 }
 
 /**
+ * Fetches and returns the current commit SHA of `origin/main`, without touching the local
+ * checkout (unlike {@link checkoutMain}). Used to detect when `origin/main` has advanced past
+ * the commit that was live when this process started, so the harness can restart itself and
+ * pick up merged code changes instead of running stale, already-loaded modules forever - ESM
+ * only loads a module once per process, so `git pull` alone never takes effect (see issue #43).
+ */
+export async function remoteMainCommit(cwd: string): Promise<string> {
+  await execFileAsync('git', ['fetch', 'origin', 'main'], { cwd });
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'origin/main'], { cwd });
+  return stdout.trim();
+}
+
+/**
  * Commits any uncommitted changes as a checkpoint (harness-authored, not gated by the quality
  * hooks that apply to agent commits - it's explicitly WIP, not a finished unit of work), so
  * progress survives a budget-exhausted sprint instead of being discarded. Returns whether there

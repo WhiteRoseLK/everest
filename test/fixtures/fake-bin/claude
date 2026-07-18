@@ -22,6 +22,15 @@ if [ "$AGENT" = "code-reviewer" ]; then
   exit 0
 fi
 
+if [ -n "${FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN:-}" ]; then
+  # Simulates a concurrent merge landing on origin/main while this sprint runs (e.g.
+  # code-reviewer merging a different issue's PR) - used to test that the harness notices and
+  # restarts (src/loop.ts restartIfMainAdvanced, issue #43). Built with plumbing commands so it
+  # doesn't disturb whatever branch is currently checked out.
+  new_commit=$(git commit-tree 'origin/main^{tree}' -p origin/main -m "concurrent merge on main")
+  git push origin "$new_commit":refs/heads/main
+fi
+
 if [ -n "${FAKE_CLAUDE_RATE_LIMITED:-}" ]; then
   echo "fake claude invoked (rate limited)" >> /tmp/fake-claude-invoked.marker
   echo '{"type":"result","subtype":"error_rate_limit","is_error":true,"errors":["rate_limit_exceeded"],"total_cost_usd":0.0}'

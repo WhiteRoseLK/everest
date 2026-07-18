@@ -1,6 +1,11 @@
 services:
   harness:
     build: .
+    # The harness deliberately exits (see restartIfMainAdvanced in src/loop.ts) once
+    # origin/main advances past the commit it started with, since Node's ESM loader never
+    # reloads modules mid-process - this policy is what turns that exit into an actual reload
+    # of the merged code (issue #43).
+    restart: unless-stopped
     volumes:
       - .:/app
       - /app/node_modules

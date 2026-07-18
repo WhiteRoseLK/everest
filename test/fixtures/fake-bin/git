@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Delegates to the real git binary for everything, except it can simulate `git fetch origin main`
+# failing exactly once - used to test that a transient failure capturing `origin/main`'s commit at
+# harness startup (src/loop.ts tryCaptureMainCommit) doesn't permanently disable the self-restart
+# safety net for the process's whole lifetime (issue #43 review feedback). Real git is invoked via
+# an absolute path so this wrapper doesn't recurse on itself through PATH.
+REAL_GIT=/usr/bin/git
+
+if [ "${1:-}" = "fetch" ] && [ "${2:-}" = "origin" ] && [ "${3:-}" = "main" ]; then
+  if [ -f "${FAKE_GIT_FETCH_MAIN_FAIL_ONCE:-}" ]; then
+    rm -f "$FAKE_GIT_FETCH_MAIN_FAIL_ONCE"
+    echo "fake git: simulated transient fetch failure" >&2
+    exit 1
+  fi
+fi
+
+exec "$REAL_GIT" "$@"
