@@ -36,6 +36,19 @@ describe('memory injection (issue #12)', () => {
     expect(memory).toContain('tronqué');
   });
 
+  it('truncates from the start and keeps the newest entries at the end (issue #45)', () => {
+    const oldestEntry = '- 2020-01-01 (issue #1): an ancient lesson that should get dropped';
+    const filler = 'x'.repeat(10_000);
+    const newestEntry = '- 2026-07-18 (issue #45): the freshest lesson, must survive truncation';
+    writeFileSync(join(cwd, 'MEMORY.md'), `${oldestEntry}\n${filler}\n${newestEntry}`);
+
+    const memory = readMemory(cwd);
+
+    expect(memory).toContain('tronqué');
+    expect(memory).toContain(newestEntry);
+    expect(memory).not.toContain(oldestEntry);
+  });
+
   it('injects MEMORY.md content into buildPrompt for an issue', () => {
     writeFileSync(join(cwd, 'MEMORY.md'), '- 2026-07-16 (issue #7): watch out for X');
     const issue: Issue = { number: 42, title: 'Do the thing', labels: [], createdAt: '2024-01-01' };
