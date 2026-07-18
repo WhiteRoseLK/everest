@@ -57,3 +57,13 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   ouvert dans la fenêtre sans prétendre attribuer l'auteur. Pattern d'état persistant réutilisable
   pour tout futur "depuis la dernière fois" : `.harness/<nom>.json` (gitignored), écrit après
   lecture, jamais une fenêtre glissante fixe codée en dur.
+
+- 2026-07-18 (issue #39) : `git add -A -- . ':!.harness'` échoue avec "paths are ignored by one
+  of your .gitignore files" dès que `.harness/` est effectivement listé dans `.gitignore` — git
+  traite un pathspec de négation (`:!chemin`) comme une référence explicite au chemin dès que ce
+  chemin est ignoré, même si l'intention est de l'exclure, pas de l'ajouter. Ça avait cassé
+  `commitWorkInProgress` en prod (checkpoint WIP après `budgetExceeded`) une fois `.harness`
+  effectivement ajouté à `.gitignore`. Fix : `git add -A -- .` (laisse `.gitignore` faire son
+  travail normalement) puis `git reset -- .harness` en filet de sécurité si `.gitignore` est
+  absent/mal configuré (`git reset` n'échoue pas sur un chemin jamais indexé). Généraliser : ne
+  jamais combiner un pathspec de négation avec un chemin déjà couvert par `.gitignore`.

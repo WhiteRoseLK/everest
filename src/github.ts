@@ -233,7 +233,14 @@ export async function commitWorkInProgress(cwd: string, message: string): Promis
   if (stdout.trim() === '') return false;
 
   await setGitIdentity('everest-harness', 'harness@everest.local', cwd);
-  await execFileAsync('git', ['add', '-A', '--', '.', ':!.harness'], { cwd });
+  // `git add -A -- . ':!.harness'` fails with "paths are ignored by one of your .gitignore
+  // files" once .harness/ is actually listed in .gitignore (git treats the negated pathspec as
+  // an explicit reference to an ignored path and refuses it, even though it's an exclusion, not
+  // an inclusion). Add everything (.gitignore already keeps .harness/ out in the normal case),
+  // then explicitly unstage .harness/ as a fallback for a missing/misconfigured .gitignore -
+  // `git reset` doesn't error on paths that were never staged.
+  await execFileAsync('git', ['add', '-A', '--', '.'], { cwd });
+  await execFileAsync('git', ['reset', '--', '.harness'], { cwd }).catch(() => undefined);
   await execFileAsync('git', ['commit', '-m', message], { cwd });
   return true;
 }
