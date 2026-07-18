@@ -1,9 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { createBranch, deriveIssueTitle, commitWorkInProgress } from '../src/github.js';
+import {
+  createBranch,
+  deriveIssueTitle,
+  commitWorkInProgress,
+  splitIntoTopics,
+  inferLabels,
+  formatIssueBody,
+  createIssuesFromMessage,
+} from '../src/github.js';
+
+const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
 function git(args: string[], cwd: string): void {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
@@ -186,5 +196,150 @@ describe('deriveIssueTitle', () => {
     const message = 'x'.repeat(5000);
 
     expect(deriveIssueTitle(message).length).toBeLessThan(256);
+  });
+});
+
+describe('splitIntoTopics', () => {
+  it('returns the trimmed message unchanged when it is plain prose', () => {
+    expect(splitIntoTopics('Add dark mode to the settings page')).toEqual([
+      'Add dark mode to the settings page',
+    ]);
+  });
+
+  it('leaves a message with a single list item unsplit', () => {
+    expect(splitIntoTopics('Please also:\n- add dark mode')).toEqual([
+      'Please also:\n- add dark mode',
+    ]);
+  });
+
+  it('splits a bulleted list of independent asks into separate topics', () => {
+    const message = '- add dark mode\n- fix the flaky login test\n- update the README';
+    expect(splitIntoTopics(message)).toEqual([
+      'add dark mode',
+      'fix the flaky login test',
+      'update the README',
+    ]);
+  });
+
+  it('splits a numbered list and folds continuation lines into the preceding item', () => {
+    const message = '1. Add dark mode\n   for the settings page\n2. Fix the flaky login test';
+    expect(splitIntoTopics(message)).toEqual([
+      'Add dark mode for the settings page',
+      'Fix the flaky login test',
+    ]);
+  });
+});
+
+describe('inferLabels', () => {
+  it('infers "bug" from crash/error wording', () => {
+    expect(inferLabels('The app crashes every time I click submit')).toEqual(['bug']);
+  });
+
+  it('infers "documentation" from docs/readme wording', () => {
+    expect(inferLabels('The README is out of date, please update the docs')).toEqual([
+      'documentation',
+    ]);
+  });
+
+  it('infers "question" from a message phrased as a question', () => {
+    expect(inferLabels('Why does the retry loop use exponential backoff?')).toEqual(['question']);
+  });
+
+  it('defaults to "enhancement" when nothing else matches', () => {
+    expect(inferLabels('Add dark mode to the settings page')).toEqual(['enhancement']);
+  });
+
+  it('adds priority:critical for urgent/blocking wording', () => {
+    expect(inferLabels('This is urgent, it breaks production')).toEqual([
+      'enhancement',
+      'priority:critical',
+    ]);
+  });
+
+  it('adds priority:high for important/soon wording', () => {
+    expect(inferLabels('This is important, please do it soon')).toEqual([
+      'enhancement',
+      'priority:high',
+    ]);
+  });
+});
+
+describe('formatIssueBody', () => {
+  it('wraps the topic under a Request heading with no related issues', () => {
+    const body = formatIssueBody('Add dark mode');
+    expect(body).toContain('## Request');
+    expect(body).toContain('Add dark mode');
+    expect(body).not.toContain('see also');
+  });
+
+  it('cross-links related issues when provided', () => {
+    const body = formatIssueBody('Add dark mode', [12, 13]);
+    expect(body).toContain('see also #12, #13');
+  });
+});
+
+describe('createIssuesFromMessage', () => {
+  let originalPath: string | undefined;
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'everest-create-issues-'));
+    originalPath = process.env.PATH;
+    process.env.PATH = `${FAKE_BIN}:${originalPath}`;
+  });
+
+  afterEach(() => {
+    process.env.PATH = originalPath;
+    delete process.env.FAKE_GH_ISSUE_CREATE_MARKER;
+    delete process.env.FAKE_GH_COMMENT_MARKER;
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('creates a single issue with an inferred label when the message is not a list', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    const created = await createIssuesFromMessage('fake/repo', 'The app crashes on submit');
+
+    expect(created).toHaveLength(1);
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).toContain('--label bug');
+    expect(args).toContain('## Request');
+  });
+
+  it('lets an explicit priority override the inferred one', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    await createIssuesFromMessage('fake/repo', 'This is urgent, please fix', 'low');
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).toContain('--label priority:low');
+    expect(args).not.toContain('priority:critical');
+  });
+
+  it('splits a bulleted multi-topic message into separate cross-linked issues', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    const commentMarker = join(tmpRoot, 'comment.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+    process.env.FAKE_GH_COMMENT_MARKER = commentMarker;
+
+    const message = '- add dark mode\n- fix the flaky login test';
+    const created = await createIssuesFromMessage('fake/repo', message);
+
+    expect(created).toHaveLength(2);
+    const createCalls = readFileSync(marker, 'utf-8')
+      .split('---FAKE_GH_ISSUE_CREATE_END---')
+      .map((call) => call.trim())
+      .filter((call) => call.length > 0);
+    expect(createCalls).toHaveLength(2);
+    expect(createCalls[0]).toContain('add dark mode');
+    expect(createCalls[1]).toContain('fix the flaky login test');
+
+    expect(existsSync(commentMarker)).toBe(true);
+    const comments = readFileSync(commentMarker, 'utf-8');
+    expect(comments).toContain('see also');
+    expect(comments).toContain(String(created[0].number));
+    expect(comments).toContain(String(created[1].number));
   });
 });

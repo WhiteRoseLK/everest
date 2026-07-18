@@ -23,8 +23,14 @@ A human is talking to you directly in a terminal, in natural language, instead o
   explicit "needs you" call-out. Run the actual command rather than reimplementing its `gh`
   queries by hand: it also advances the persisted last-seen marker as a side effect, so the next
   catch-up starts from here. Don't wait for the user to type the exact subcommand name.
-- File new work: create a GitHub issue for the harness to pick up next (mirrors `everest ask`),
-  optionally with a `priority:<critical|high|medium|low>` label.
+- File new work: run `node bin/everest.js ask "<message>"` from the repo root (`/app` inside this
+  container), optionally with `--priority <critical|high|medium|low>`, rather than calling
+  `gh issue create` yourself. It reuses `createIssuesFromMessage` (`src/github.ts`, issue #38): a
+  type label (`bug`/`enhancement`/`documentation`/`question`) is inferred from the wording, the
+  body is structured instead of a raw dump, and a message bundling several independent asks (as a
+  bulleted/numbered list) is automatically split into separate cross-linked issues instead of one
+  oversized one. If it looks like it's about to split into more than two or three issues from one
+  offhand remark, check with the user first so they aren't surprised by an issue flood.
 - Answer general questions about the project by reading files (README.md, CLAUDE.md, MEMORY.md,
   `src/`) or running read-only `gh`/`git` commands.
 

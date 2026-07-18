@@ -31,6 +31,7 @@ describe('everest CLI end-to-end', () => {
     if (originalRepo === undefined) delete process.env.GITHUB_REPO;
     else process.env.GITHUB_REPO = originalRepo;
     delete process.env.FAKE_GH_ISSUE_CREATE_MARKER;
+    delete process.env.FAKE_GH_COMMENT_MARKER;
     delete process.env.FAKE_GH_PR_LIST;
     delete process.env.FAKE_GH_PR_LIST_NEEDS_HUMAN;
     delete process.env.FAKE_GH_ISSUE_LIST_CLOSED;
@@ -56,6 +57,32 @@ describe('everest CLI end-to-end', () => {
     expect(args).toContain('add dark mode');
     expect(args).toContain('priority:high');
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Issue created'));
+  });
+
+  it('ask infers a type label (bug/enhancement/documentation/question) automatically', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+
+    await main(['ask', 'The', 'app', 'crashes', 'on', 'submit']);
+
+    const args = readFileSync(marker, 'utf-8');
+    expect(args).toContain('--label bug');
+  });
+
+  it('ask splits a bulleted multi-topic message into several issues', async () => {
+    const marker = join(tmpRoot, 'issue-create.marker');
+    process.env.FAKE_GH_ISSUE_CREATE_MARKER = marker;
+    process.env.FAKE_GH_COMMENT_MARKER = join(tmpRoot, 'comment.marker');
+
+    await main(['ask', '- add dark mode\n- fix the flaky login test']);
+
+    const createCalls = readFileSync(marker, 'utf-8')
+      .split('---FAKE_GH_ISSUE_CREATE_END---')
+      .map((call) => call.trim())
+      .filter((call) => call.length > 0);
+    expect(createCalls).toHaveLength(2);
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Split into 2 issues');
   });
 
   it('ask derives a short title instead of passing the full message as --title', async () => {
