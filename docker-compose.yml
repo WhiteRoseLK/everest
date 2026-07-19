@@ -9,6 +9,14 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      # Named volume on the 'node' user's home directory (see Dockerfile: USER node), so Claude
+      # Code's onboarding/config state (~/.claude, theme choice, credentials helper cache, etc.)
+      # survives container *recreation* (image rebuild, `docker compose down`/`up`), not just a
+      # restart - the anonymous container filesystem is otherwise wiped on recreation, forcing
+      # onboarding/login prompts again even though CLAUDE_CODE_OAUTH_TOKEN is already set
+      # (issue #63). Docker seeds a fresh named volume from the image's existing content on first
+      # start, so files written at build time (e.g. the git config below) are preserved too.
+      - claude_home:/home/node
     environment:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}
@@ -18,3 +26,9 @@ services:
       - BASE_RETRY_DELAY_MS=${BASE_RETRY_DELAY_MS:-60000}
       - MAX_RETRY_DELAY_MS=${MAX_RETRY_DELAY_MS:-3600000}
       - MAX_RETRY_COUNT=${MAX_RETRY_COUNT:-10}
+
+volumes:
+  # See the mount comment above: persists /home/node (Claude Code onboarding/config state)
+  # across `docker compose down`/`up` and image rebuilds, unlike the anonymous container
+  # filesystem.
+  claude_home:
