@@ -4,11 +4,35 @@ Harnais léger d'orchestration Claude Code. Lit un backlog GitHub Issues, traite
 
 ## Setup
 
+Le chemin de production, pensé pour un déploiement "clé en main" sur un hôte frais (VPS
+Debian/Ubuntu typique) : le seul prérequis est Docker (+ le plugin Compose), tout le reste
+(Node, npm, `gh`) est déjà embarqué dans l'image du conteneur `harness` (voir `Dockerfile`), donc
+inutile de rien installer d'autre sur l'hôte.
+
+```
+git clone https://github.com/WhiteRoseLK/everest.git
+cd everest
+./setup.sh
+```
+
+`setup.sh` installe Docker automatiquement s'il est absent (script officiel `get.docker.com`, Linux
+apt uniquement), crée `.env` depuis `.env.example` s'il n'existe pas encore (le script s'arrête
+alors le temps que tu renseignes `GITHUB_REPO`/`CLAUDE_CODE_OAUTH_TOKEN`/`GH_TOKEN`), puis lance
+`docker compose up -d --build harness`. Relance simplement `./setup.sh` une fois `.env` rempli.
+
+### Dev local sans Docker
+
+Pour itérer sur le code du harnais lui-même sans repasser par l'image Docker à chaque changement :
+
 ```
 npm install
-cp .env.example .env  # déjà fait en local, ajuster si besoin
+cp .env.example .env  # ajuster les valeurs
 npm start
 ```
+
+Nécessite alors Node.js et `gh` installés et authentifiés sur l'hôte. Ce chemin ne bénéficie pas
+du confinement `bypassPermissions` ni de l'auto-redémarrage sur merge de `main` (voir "Known
+Pitfalls" dans `CLAUDE.md`) — réservé au développement, pas à un déploiement long-terme.
 
 ## CLI
 
