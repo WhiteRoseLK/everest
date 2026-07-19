@@ -133,10 +133,14 @@ export async function findResumablePullRequest(repo: string): Promise<ResumableP
   return null;
 }
 
-/** Creates `label` on `repo` if it doesn't exist yet, then adds it to the PR for `branch`. */
+/**
+ * Creates `label` on `repo` if it doesn't exist yet, then adds it to a PR (`target.type === 'pr'`,
+ * `target.ref` is the branch) or an issue (`target.type === 'issue'`, `target.ref` is the issue
+ * number as a string) via `gh pr edit`/`gh issue edit` respectively.
+ */
 async function addLabel(
   repo: string,
-  branch: string,
+  target: { type: 'pr' | 'issue'; ref: string },
   label: string,
   color: string,
   description: string,
@@ -153,7 +157,15 @@ async function addLabel(
     description,
     '--force',
   ]);
-  await execFileAsync('gh', ['pr', 'edit', branch, '--repo', repo, '--add-label', label]);
+  await execFileAsync('gh', [
+    target.type,
+    'edit',
+    target.ref,
+    '--repo',
+    repo,
+    '--add-label',
+    label,
+  ]);
 }
 
 /**
@@ -163,7 +175,7 @@ async function addLabel(
 export async function markPullRequestNeedsFixup(repo: string, branch: string): Promise<void> {
   await addLabel(
     repo,
-    branch,
+    { type: 'pr', ref: branch },
     NEEDS_FIXUP_LABEL,
     'D93F0B',
     'code-reviewer requested changes; issue-worker should address them.',
@@ -177,7 +189,27 @@ export async function markPullRequestNeedsFixup(repo: string, branch: string): P
 export async function markPullRequestNeedsHuman(repo: string, branch: string): Promise<void> {
   await addLabel(
     repo,
-    branch,
+    { type: 'pr', ref: branch },
+    NEEDS_HUMAN_LABEL,
+    'B60205',
+    'Needs human intervention, the harness could not resolve this automatically.',
+  );
+}
+
+/**
+ * Labels the issue itself (not just a PR) as needing human attention. Applied wherever the
+ * harness gives up on an issue and posts an "intervention humaine nécessaire" comment
+ * ({@link retryFreshSprintOrGiveUp} in loop.ts and its callers): without it, an issue that never
+ * got as far as opening a PR was invisible to {@link hasOpenPullRequest} and kept getting picked
+ * up again on every poll, burning a full sprint per cycle for no benefit until a human noticed -
+ * see issue #60. {@link listOpenIssues} already returns each issue's labels, so filtering these
+ * out is a plain in-memory check (see `filterOutIssuesNeedingHuman` in loop.ts), no extra API call
+ * needed.
+ */
+export async function markIssueNeedsHuman(repo: string, issue: Issue): Promise<void> {
+  await addLabel(
+    repo,
+    { type: 'issue', ref: String(issue.number) },
     NEEDS_HUMAN_LABEL,
     'B60205',
     'Needs human intervention, the harness could not resolve this automatically.',

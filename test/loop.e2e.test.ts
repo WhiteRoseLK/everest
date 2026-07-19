@@ -62,6 +62,8 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_ISSUE_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_ADVANCE_ORIGIN_MAIN;
     delete process.env.FAKE_GH_PR_EDIT_MARKER;
+    delete process.env.FAKE_GH_ISSUE_LIST;
+    delete process.env.FAKE_GH_ISSUE_EDIT_MARKER;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -180,6 +182,54 @@ describe('runLoop end-to-end', () => {
     const commentArgs = readFileSync(commentMarker, 'utf-8');
     expect(commentArgs).toContain('limite de 2 tentatives');
 
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+  });
+
+  it('labels the issue itself needs-human on give-up, and stops re-picking it (issue #60)', async () => {
+    // Before the fix: an issue that never got as far as opening a PR was invisible to
+    // filterOutIssuesWithOpenPr once the harness gave up on it, so pickNextIssue kept re-selecting
+    // it on every poll - burning a full sprint per cycle for no benefit until a human noticed (see
+    // issue #47 in practice). Fix: the harness also labels the issue itself needs-human at
+    // give-up, and excludes such issues from the candidate pool up front.
+    process.env.FAKE_CLAUDE_RATE_LIMITED = '1';
+    const issueEditMarker = join(tmpRoot, 'issue-edit-marker.txt');
+    process.env.FAKE_GH_ISSUE_EDIT_MARKER = issueEditMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 1,
+    };
+
+    // maxRetryCount = 1 means 2 total attempts before giving up.
+    await runLoop(config, workDir, 2);
+
+    expect(existsSync(issueEditMarker)).toBe(true);
+    const issueEditArgs = readFileSync(issueEditMarker, 'utf-8');
+    expect(issueEditArgs).toContain('issue edit 1');
+    expect(issueEditArgs).toContain('needs-human');
+
+    // Simulate GitHub now reporting the issue as labeled needs-human (as the previous call would
+    // have caused) and run another iteration: the issue must not be picked up again - no branch
+    // is created, no rate-limit retry is attempted, nothing new is written to state.
+    process.env.FAKE_GH_ISSUE_LIST = JSON.stringify([
+      {
+        number: 1,
+        title: 'Test issue',
+        labels: [{ name: 'needs-human' }],
+        createdAt: '2024-01-01T00:00:00Z',
+      },
+    ]);
+    await runLoop(config, workDir, 1);
+
+    expect(existsSync(prMarker)).toBe(false);
     const statePath = join(workDir, '.harness/state.json');
     expect(existsSync(statePath)).toBe(false);
   });
