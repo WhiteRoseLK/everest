@@ -21,4 +21,19 @@ describe('docker-compose.yml', () => {
     expect(composeFile).toMatch(/^volumes:\s*$/m);
     expect(composeFile).toMatch(/^\s{2}claude_home:\s*$/m);
   });
+
+  /**
+   * Regression test for issue #75: '.:/app' bind-mounts the host repo checkout over the image's
+   * /app, replacing its ownership too - so if the host checkout isn't owned by uid 1000 (the
+   * 'node' user), writes to .harness/ (e.g. saveLastCatchupAt in src/catchup.ts) fail with
+   * EACCES. A named volume mounted on /app/.harness, seeded from the image at build time
+   * (see Dockerfile), keeps that path's ownership independent of the host bind mount.
+   */
+  it('mounts a named volume on .harness so it is writable regardless of host checkout ownership', () => {
+    expect(composeFile).toMatch(/^\s*- harness_state:\/app\/\.harness\s*$/m);
+  });
+
+  it('declares the harness_state named volume at the top level', () => {
+    expect(composeFile).toMatch(/^\s{2}harness_state:\s*$/m);
+  });
 });
