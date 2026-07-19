@@ -197,6 +197,7 @@ async function runReviewLoop(
       cwd,
       config.maxBudgetUsdPerIssue,
       `issue-#${issue.number}-fixup`,
+      branch,
     );
     if (!fixup.success) {
       console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
@@ -312,7 +313,11 @@ async function handleIssue(
     // locally: re-invoking issue-worker here would find nothing left to do and report "no new
     // commit produced" for work that was actually already finished, burning a whole sprint and a
     // unit of retryCount on what's really just a push problem, not an agent problem (issue #61).
-    // Retry the push directly instead. --no-verify only if the stuck commit is a WIP checkpoint
+    // runClaudeCode itself now judges success the same way (issue #64), so this check is no
+    // longer strictly required for correctness here - but it's kept as a cost optimization: it
+    // skips invoking issue-worker at all rather than paying for a sprint that would immediately
+    // find nothing left to do. Retry the push directly instead. --no-verify only if the stuck
+    // commit is a WIP checkpoint
     // (see commitWorkInProgress) - a finished agent commit should still go through the normal
     // lint/test pre-push hook, same as it would on its first push attempt.
     const noVerify = await isUnpushedCommitWipCheckpoint(cwd);
@@ -353,6 +358,7 @@ async function handleIssue(
     cwd,
     config.maxBudgetUsdPerIssue,
     `issue-#${issue.number}`,
+    branch,
   );
 
   if (result.rateLimited) {

@@ -49,23 +49,21 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   shell-out `claude -p`) ; les appelants qui ont un vrai LLM dans la boucle (agent `chat`) passent
   `--title` pour la court-circuiter plutôt que de forcer tout le monde à payer un appel LLM.
 
-- 2026-07-18/19 (issues #54, #57, #55, #59, #61) : dans `handleIssue`/`runReviewLoop`
+- 2026-07-18/19 (issues #54, #57, #55, #59, #61, #64) : dans `handleIssue`/`runReviewLoop`
   (`src/loop.ts`), **tout** chemin d'échec de sprint doit passer par `retryFreshSprintOrGiveUp`
   (jamais `commentOnIssue` + `clearState` directement) — sinon `retryCount` repart à 0 et le
-  harnais boucle indéfiniment sans jamais atteindre `maxRetryCount` ni poser `needs-human` (#54 :
-  `pushBranch` non protégé par `try/catch` ; #57 : "no new commit produced" traité hors du
-  mécanisme borné). Plusieurs nuances court-circuitent ce retry borné plutôt que de le consommer :
-  (1) un push rejeté pour scope OAuth `workflow` manquant échoue identiquement à chaque essai —
-  `isMissingWorkflowScopeError` (`src/github.ts`) le détecte et escalade en `needs-human` dès le
-  premier échec (#55) ; (2) un échec de push potentiellement transitoire est d'abord retenté
-  directement, sans nouveau sprint (`pushBranchWithRetries`, `config.pushRetryCount`/
-  `pushRetryDelayMs`, #59) ; (3) quand `pushBranchWithRetries` finit par s'épuiser malgré tout et
-  qu'un nouveau sprint est lancé, `handleIssue` vérifie d'abord `hasUnpushedCommit` (`src/github.ts`)
-  avant de rappeler `issue-worker` — s'il y a déjà un commit local en avance sur `origin` (un sprint
-  précédent a réussi mais son push a échoué), on retente juste le push plutôt que de relancer
-  l'agent, qui ne trouverait rien à faire et rapporterait à tort "no new commit produced" (#61).
-  Le push d'un fixup de review (PR déjà ouverte) suit la même logique (2) mais escalade directement
-  (pas de nouveau sprint) une fois `pushBranchWithRetries` épuisé.
+  harnais boucle indéfiniment sans jamais atteindre `maxRetryCount` ni `needs-human` (#54, #57).
+  Nuances qui court-circuitent ce retry borné plutôt que de le consommer : scope OAuth `workflow`
+  manquant → `isMissingWorkflowScopeError` escalade dès le premier échec, ça échoue pareil à
+  chaque essai (#55) ; échec de push potentiellement transitoire → retenté directement d'abord,
+  sans nouveau sprint (`pushBranchWithRetries`, #59). Et surtout : "y a-t-il un commit à pousser"
+  doit comparer HEAD à `origin`, jamais HEAD-avant-invocation à HEAD-après-invocation d'un sprint
+  donné — un sprint repris sur une branche qui a déjà un commit correct mais non poussé (échec de
+  push précédent, ou redémarrage #43 avant le push) doit être traité comme un succès, pas comme
+  "no new commit produced". `hasUnpushedCommit` (`src/github.ts`) est ce critère ; `handleIssue`
+  l'utilise en pré-check pour éviter de rappeler `issue-worker` pour rien (#61), et `runClaudeCode`
+  (`src/claude.ts`) l'utilise lui-même comme critère de succès à tous ses points d'appel (sprint
+  initial et fixup de review) plutôt que de comparer HEAD avant/après (#64).
 
 - 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
   par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la

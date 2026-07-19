@@ -347,7 +347,9 @@ export function isMissingWorkflowScopeError(error: unknown): boolean {
  * sprint that genuinely produced nothing): re-invoking issue-worker in the former case finds
  * nothing left to do and misreports "no new commit produced" for work that was actually already
  * finished - see issue #61. Returns `false` when HEAD matches `origin/main`, i.e. no commit has
- * been made on the branch yet.
+ * been made on the branch yet. Also the basis of `runClaudeCode`'s own success check (see
+ * `src/claude.ts`), for the same reason on any sprint that resumes an existing branch, not just
+ * the dedicated pre-check in `handleIssue` (issue #64).
  */
 export async function hasUnpushedCommit(branch: string, cwd: string): Promise<boolean> {
   const [local, main] = await Promise.all([currentCommit(cwd), remoteMainCommit(cwd)]);
