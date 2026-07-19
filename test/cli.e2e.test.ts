@@ -1,8 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main, runWatch, runChat, runCatchup } from '../src/cli.js';
+import { main, runWatch, runChat, runCatchup, runDoctor } from '../src/cli.js';
 
 const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
 const DOCKER_COMPOSE_UP_MARKER = '/tmp/fake-docker-compose-up.marker';
@@ -375,5 +383,44 @@ describe('everest CLI end-to-end', () => {
     ).length;
     // Iteration 1 fails before it can render a snapshot; iteration 2 succeeds and renders one.
     expect(snapshotCount).toBe(1);
+  });
+
+  it('doctor reports a writable .harness, the in-progress issue, and persisted iteration errors', async () => {
+    mkdirSync(join(tmpRoot, '.harness'), { recursive: true });
+    writeFileSync(
+      join(tmpRoot, '.harness/state.json'),
+      JSON.stringify({
+        issueNumber: 7,
+        branch: 'harness/issue-7-x',
+        startedAt: '2026-07-19T00:00:00Z',
+        retryCount: 2,
+      }),
+    );
+    writeFileSync(
+      join(tmpRoot, '.harness/errors.jsonl'),
+      `${JSON.stringify({ timestamp: '2026-07-19T01:00:00Z', message: 'checkoutMain failed' })}\n`,
+    );
+
+    runDoctor(tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('.harness/ writable:');
+    expect(output).toContain('✅ yes');
+    expect(output).toContain('#7 on harness/issue-7-x');
+    expect(output).toContain('checkoutMain failed');
+  });
+
+  it('doctor flags an unwritable .harness/ as the likely stall cause (issue #82)', () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return; // root bypasses perms
+    mkdirSync(join(tmpRoot, '.harness'), { recursive: true });
+    chmodSync(join(tmpRoot, '.harness'), 0o500);
+
+    runDoctor(tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('❌ NO');
+    expect(output).toContain('issue #75');
+
+    chmodSync(join(tmpRoot, '.harness'), 0o755); // restore so afterEach can clean up
   });
 });

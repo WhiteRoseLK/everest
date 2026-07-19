@@ -9,6 +9,8 @@ import {
   listBlockers,
 } from './github.js';
 import { buildCatchupSummary, type CatchupSummary } from './catchup.js';
+import { checkHarnessWritable, loadIterationErrors } from './diagnostics.js';
+import { loadState } from './state.js';
 
 /** Lookback window used by `everest status` when reporting recently closed issues. */
 const RECENT_ISSUES_WINDOW_HOURS = 24;
@@ -33,6 +35,7 @@ function printUsage(): void {
       '  everest status',
       '  everest blockers',
       '  everest catchup',
+      '  everest doctor',
       '  everest watch [--interval <ms>]',
     ].join('\n'),
   );
@@ -163,6 +166,48 @@ function formatCatchupSummary(summary: CatchupSummary): string[] {
 export async function runCatchup(repo: string, cwd: string = REPO_ROOT): Promise<void> {
   const summary = await buildCatchupSummary(repo, cwd);
   for (const line of formatCatchupSummary(summary)) console.log(line);
+}
+
+/**
+ * Handles `everest doctor`: a self-diagnostic for the "loop is alive but makes no progress" class
+ * of failure (issue #82), readable from `everest chat` without any docker access. Reports three
+ * things the container's unreachable stdout otherwise hides: whether `.harness/` is actually
+ * writable right now (an unwritable one - the EACCES of issue #75 - stalls every iteration and
+ * even swallows the error log itself), which issue the harness currently considers in progress
+ * (`state.json`), and the most recent persisted iteration errors (`.harness/errors.jsonl`).
+ */
+export function runDoctor(cwd: string = REPO_ROOT): void {
+  const writable = checkHarnessWritable(cwd);
+  console.log('everest doctor');
+  console.log();
+  console.log('.harness/ writable:');
+  if (writable.writable) {
+    console.log('  ✅ yes');
+  } else {
+    console.log(`  ❌ NO - ${writable.error ?? 'unknown error'}`);
+    console.log('     This stalls every loop iteration and hides its own error log. See issue #75');
+    console.log('     (fix: ensure /app/.harness is owned/writable by the node user).');
+  }
+
+  const state = loadState(cwd);
+  console.log();
+  console.log('In-progress issue (state.json):');
+  console.log(
+    state
+      ? `  #${state.issueNumber} on ${state.branch} (retryCount ${state.retryCount}, started ${state.startedAt})`
+      : '  (none)',
+  );
+
+  const errors = loadIterationErrors(cwd);
+  console.log();
+  console.log('Recent iteration errors (.harness/errors.jsonl):');
+  if (errors.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const error of errors) {
+      console.log(`  [${error.timestamp}] ${error.message}`);
+    }
+  }
 }
 
 /**
@@ -356,6 +401,9 @@ export async function main(argv: string[]): Promise<void> {
       break;
     case 'catchup':
       await runCatchup(config.githubRepo);
+      break;
+    case 'doctor':
+      runDoctor();
       break;
     case 'watch':
       await runWatch(config.githubRepo, parseIntervalFlag(rest, config.watchPollIntervalMs));

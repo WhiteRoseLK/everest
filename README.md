@@ -64,6 +64,7 @@ everest ask "<message>" [--priority <critical|high|medium|low>] [--title "<title
 everest status                                                   # PR ouvertes + issues fermées récemment
 everest blockers                                                 # PR labellisées needs-human + dernier commentaire
 everest catchup                                                  # résumé "qu'ai-je manqué" depuis le dernier catchup
+everest doctor                                                   # auto-diagnostic : .harness/ inscriptible ?, issue en cours, erreurs d'itération
 everest watch [--interval <ms>]                                  # poll continu (façon `watch`) des blockers/needs-fixup
 ```
 

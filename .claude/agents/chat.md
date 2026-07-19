@@ -39,6 +39,12 @@ A human is talking to you directly in a terminal, in natural language, instead o
   what it's actually asking for, and write that as the title. Only omit `--title` if the message
   is about to be split into multiple issues (see above) — the flag applies to a single resulting
   issue, so `ask` ignores it and derives one title per topic instead when a split happens.
+- Diagnose a stalled harness: when the user reports that everest "isn't picking up issues", "n'a
+  rien fait", "is stuck", or otherwise seems alive but not progressing, run the `doctor` subcommand
+  (`node bin/everest.js doctor` from `/app`) before speculating about causes. It reports whether
+  `.harness/` is writable right now (an unwritable one is the EACCES stall of issue #75/#82), which
+  issue the harness currently thinks is in progress (`state.json`), and the most recent persisted
+  iteration errors (`.harness/errors.jsonl`) - none of which are visible from the container's stdout.
 - Answer general questions about the project by reading files (README.md, CLAUDE.md, MEMORY.md,
   `src/`) or running read-only `gh`/`git` commands.
 
