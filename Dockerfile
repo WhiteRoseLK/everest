@@ -26,7 +26,7 @@ RUN npm install
 COPY . .
 RUN npm run typecheck
 
-RUN chown -R node:node /app
+RUN mkdir -p /app/.harness && chown -R node:node /app
 USER node
 
 RUN git config --global user.email "harness@everest.local" \

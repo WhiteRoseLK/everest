@@ -17,6 +17,16 @@ services:
       # (issue #63). Docker seeds a fresh named volume from the image's existing content on first
       # start, so files written at build time (e.g. the git config below) are preserved too.
       - claude_home:/home/node
+      # Named volume on the harness's runtime state directory, mounted over the equivalent path
+      # inside the '.:/app' bind mount above so it doesn't inherit that bind mount's ownership.
+      # '.:/app' replaces the image's /app entirely with the host directory's content *and*
+      # ownership - so if the host-side repo checkout isn't owned by uid 1000 (the 'node' user,
+      # see Dockerfile: USER node), 'node' loses write access to /app/.harness and any write
+      # (e.g. saveLastCatchupAt in src/catchup.ts) fails with EACCES (issue #75). Same fix
+      # pattern as claude_home: the Dockerfile creates /app/.harness owned by node:node at build
+      # time, so Docker seeds this named volume from that on first start, independent of host
+      # ownership.
+      - harness_state:/app/.harness
     environment:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - GH_TOKEN=${GH_TOKEN}
@@ -32,3 +42,6 @@ volumes:
   # across `docker compose down`/`up` and image rebuilds, unlike the anonymous container
   # filesystem.
   claude_home:
+  # See the mount comment above: keeps .harness/ writable by the 'node' user regardless of the
+  # host-side repo checkout's ownership (issue #75).
+  harness_state:
