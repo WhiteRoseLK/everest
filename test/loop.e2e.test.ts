@@ -78,6 +78,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -140,6 +142,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 100,
       maxRetryDelayMs: 1000,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -169,6 +173,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 2,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // maxRetryCount = 2 means 3 total attempts (retryCount goes 1, 2, 3) before giving up;
@@ -206,6 +212,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 1,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // maxRetryCount = 1 means 2 total attempts before giving up.
@@ -249,6 +257,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // Iteration 1 hits the simulated `gh issue list` failure and must not crash the process;
@@ -271,6 +281,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // The budget guardrail is on the sprint, not the issue: hitting it should not abandon the
@@ -300,6 +312,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -331,6 +345,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -371,6 +387,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -391,6 +409,50 @@ describe('runLoop end-to-end', () => {
     expect(log).toContain('Add feature.txt');
   });
 
+  it('retries the push directly instead of spending a fresh sprint when a push transiently fails (issue #59)', async () => {
+    // Rejects only the very first push attempt after this hook is installed, then succeeds from
+    // the second attempt onward - simulating a transient failure (flaky server-side hook,
+    // momentary network blip) rather than a persistent one. Before the fix, handleIssue treated
+    // any push failure as a reason to spend a whole fresh issue-worker sprint on the same branch,
+    // even though the already-committed work was correct and only the push transport hiccuped.
+    const counterFile = join(tmpRoot, 'push-attempt-counter');
+    writeFileSync(
+      join(originDir, 'hooks/pre-receive'),
+      `#!/bin/sh\ncount=$(( $(cat "${counterFile}" 2>/dev/null || echo 0) + 1 ))\necho "$count" > "${counterFile}"\n[ "$count" -ge 2 ]\n`,
+      { mode: 0o755 },
+    );
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 3,
+      pushRetryDelayMs: 1,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The push eventually succeeded (on its second direct attempt), so the PR was opened and
+    // state was cleared - a single sprint sufficed, no retry-with-a-fresh-sprint needed.
+    expect(existsSync(prMarker)).toBe(true);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+
+    // Only one issue-worker sprint ran: a second fresh sprint (the old behavior) would have added
+    // a second `issue-worker` cost-log entry for the same issue.
+    const costLog = loadCostLog(workDir);
+    const issueWorkerEntries = costLog.filter(
+      (entry) => entry.agent === 'issue-worker' && entry.label === 'issue-#1',
+    );
+    expect(issueWorkerEntries).toHaveLength(1);
+  });
+
   it('escalates to needs-human after maxRetryCount repeated push failures on finished work (issue #54)', async () => {
     writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 
@@ -404,6 +466,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 2,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
@@ -447,6 +511,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // A single iteration is enough: with the old generic-retry behavior this would only save a
@@ -489,6 +555,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -522,6 +590,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 2,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
@@ -570,6 +640,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     await runLoop(config, workDir, 1);
@@ -601,6 +673,8 @@ describe('runLoop end-to-end', () => {
       baseRetryDelayMs: 1,
       maxRetryDelayMs: 1,
       maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
     };
 
     // Iteration 1 processes issue #1 end to end (origin/main advances as a side effect along
@@ -639,6 +713,8 @@ describe('runLoop end-to-end', () => {
         baseRetryDelayMs: 1,
         maxRetryDelayMs: 1,
         maxRetryCount: 10,
+        pushRetryCount: 1,
+        pushRetryDelayMs: 1,
       };
 
       try {
