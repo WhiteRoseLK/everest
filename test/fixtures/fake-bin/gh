@@ -18,7 +18,18 @@ if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
     echo "$FAKE_GH_ISSUE_LIST_OPENED_SINCE"
     exit 0
   fi
-  echo '[{"number":1,"title":"Test issue","labels":[],"createdAt":"2024-01-01T00:00:00Z"}]'
+  # Escaping the default value's own `}` characters inside `${VAR:-...}` is fragile - bash treats
+  # an unescaped `}` there as closing the substitution early. Assigning it to a plain variable
+  # first sidesteps that entirely.
+  default_issue_list='[{"number":1,"title":"Test issue","labels":[],"createdAt":"2024-01-01T00:00:00Z"}]'
+  echo "${FAKE_GH_ISSUE_LIST:-$default_issue_list}"
+  exit 0
+fi
+
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then
+  if [ -n "${FAKE_GH_ISSUE_EDIT_MARKER:-}" ]; then
+    echo "$@" >> "$FAKE_GH_ISSUE_EDIT_MARKER"
+  fi
   exit 0
 fi
 

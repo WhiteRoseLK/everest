@@ -12,8 +12,10 @@ import {
   getPullRequestState,
   getPullRequestLabels,
   NEEDS_FIXUP_LABEL,
+  NEEDS_HUMAN_LABEL,
   findResumablePullRequest,
   markPullRequestNeedsHuman,
+  markIssueNeedsHuman,
   commitWorkInProgress,
   remoteMainCommit,
   type Issue,
@@ -66,6 +68,18 @@ async function filterOutIssuesWithOpenPr(issues: Issue[], repo: string): Promise
     issues.map((issue) => hasOpenPullRequest(repo, branchNameFor(issue))),
   );
   return issues.filter((_, index) => !flags[index]);
+}
+
+/**
+ * Excludes issues already labeled {@link NEEDS_HUMAN_LABEL}. Applied once the harness has given up
+ * on an issue (see `markIssueNeedsHuman` calls throughout this file): without it, an issue that
+ * never got as far as opening a PR stayed invisible to {@link filterOutIssuesWithOpenPr} and got
+ * re-picked on every poll, burning a full sprint per cycle for no benefit until a human intervenes
+ * - see issue #60. A plain in-memory filter, not an extra API call: {@link listOpenIssues} already
+ * returns each issue's labels.
+ */
+function filterOutIssuesNeedingHuman(issues: Issue[]): Issue[] {
+  return issues.filter((issue) => !issue.labels.includes(NEEDS_HUMAN_LABEL));
 }
 
 /**
@@ -136,6 +150,7 @@ async function runReviewLoop(
         `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`,
       );
       await markPullRequestNeedsHuman(config.githubRepo, branch);
+      await markIssueNeedsHuman(config.githubRepo, issue);
       return;
     }
   }
@@ -146,6 +161,7 @@ async function runReviewLoop(
     `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
   );
   await markPullRequestNeedsHuman(config.githubRepo, branch);
+  await markIssueNeedsHuman(config.githubRepo, issue);
 }
 
 /**
@@ -174,6 +190,7 @@ async function retryFreshSprintOrGiveUp(
       issue,
       `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
     );
+    await markIssueNeedsHuman(config.githubRepo, issue);
     clearState(cwd);
     return;
   }
@@ -235,6 +252,7 @@ async function handleIssue(
         issue,
         `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
       );
+      await markIssueNeedsHuman(config.githubRepo, issue);
       clearState(cwd);
       return;
     }
@@ -388,7 +406,8 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
   if (await resumePendingReview(config, cwd)) return;
 
   const issues = await listOpenIssues(config.githubRepo);
-  const candidates = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+  const withoutOpenPr = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
+  const candidates = filterOutIssuesNeedingHuman(withoutOpenPr);
   const issue: Issue | null = pickNextIssue(candidates);
 
   if (!issue) {

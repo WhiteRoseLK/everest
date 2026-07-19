@@ -45,13 +45,6 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   laisser du travail déjà `git add`é mais jamais committé. Si c'est correct/complet (relire le
   diff, `npm test`/`npm run lint`), le committer directement plutôt que de le refaire.
 
-- 2026-07-18 (issue #43) : ESM n'importe un module qu'une fois par process — `git pull` seul ne
-  change rien au comportement en mémoire de `npm start`. Fix : `runLoop` recapture le SHA
-  d'`origin/main` à chaque itération (`restartIfMainAdvanced`) ; dès qu'il a avancé, `exitProcess(0)`
-  puis `restart: unless-stopped` relance `npm start` avec le code neuf (rien n'est perdu,
-  `.harness/state.json` survit). Si la capture initiale échoue, retenter à chaque itération plutôt
-  que désactiver silencieusement la détection pour la vie du process (`tryCaptureMainCommit`).
-
 - 2026-07-18 (issue #44) : pour un choix "heuristique déterministe vs. vrai jugement LLM" quand
   l'appelant n'a pas toujours un LLM dans la boucle (`deriveIssueTitle`, `src/github.ts`) : donner
   aux appelants qui _ont_ du jugement (l'agent `chat`, session LLM live) un paramètre explicite
@@ -69,3 +62,9 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   inconditionnellement, sans jamais appeler `retryFreshSprintOrGiveUp`). Le push d'un fixup de
   review (PR déjà ouverte, rejouer le sprint n'aiderait pas) reste l'exception : il escalade
   directement en commentaire + `markPullRequestNeedsHuman`.
+
+- 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
+  par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la
+  substitution au premier `}` non échappé rencontré, tronquant silencieusement du JSON contenant
+  des objets. Assigner le défaut à une variable intermédiaire d'abord (`default=...; echo
+"${VAR:-$default}"`) plutôt que de l'inliner.

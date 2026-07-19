@@ -31,6 +31,8 @@ Si `needs-fixup` : le harnais rappelle `issue-worker` sur la même branche avec 
 
 Avant de créer une nouvelle branche pour l'issue suivante, le harnais fait `checkoutMain()` (checkout + `pull --ff-only`) plutôt que de partir de la branche précédente — sinon une branche mergée-et-supprimée côté remote laisserait le prochain `git checkout -b` partir d'un historique obsolète (bug auto-repéré par le harnais, issue #17).
 
+Tout abandon définitif d'une issue (comment "intervention humaine nécessaire", que ce soit `retryFreshSprintOrGiveUp`, le give-up après rate-limit, ou l'escalade `maxReviewCycles`/échec de push de fixup dans `runReviewLoop`) pose aussi le label `needs-human` sur l'**issue elle-même** (`markIssueNeedsHuman()` dans `src/github.ts`), pas seulement sur la PR. `runIteration` filtre ensuite ces issues (`filterOutIssuesNeedingHuman`, un filtre en mémoire — `listOpenIssues` renvoie déjà les labels) avant `pickNextIssue`. Sans ça, une issue qui n'avait jamais atteint l'ouverture d'une PR restait invisible à `filterOutIssuesWithOpenPr` et était re-choisie à chaque poll, gaspillant un sprint complet par cycle jusqu'à intervention humaine (issue #60, constaté en pratique sur l'issue #47).
+
 ## Budget Policy
 
 **Décision explicite de l'utilisatrice (17 juillet 2026)** : pas de budget max sur une _issue_. `MAX_BUDGET_USD_PER_ISSUE` (défaut $2) est un garde-fou sur une _invocation_ de sous-agent (un "sprint"), pas une deadline qui abandonne la tâche. Le vrai plafond global d'une issue, c'est `MAX_REVIEW_CYCLES` (un nombre de rounds, pas des dollars) — cohérent avec "les garde-fous vont sur les sous-agents, pas sur la tâche elle-même".
