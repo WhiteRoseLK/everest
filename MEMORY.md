@@ -52,30 +52,22 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   plutôt que de forcer un shell-out `claude -p` coûteux pour le seul chemin CLI non-interactif, qui
   garde l'heuristique (améliorée : filler-stripping) comme fallback raisonnable.
 
-- 2026-07-18 (issues #54, #57) : dans `handleIssue` (`src/loop.ts`), **tout** chemin d'échec doit
-  passer par `retryFreshSprintOrGiveUp` (jamais `commentOnIssue` + `clearState` directement) — sinon
-  `retryCount` repart à 0 au sprint suivant sur la même issue et le harnais boucle indéfiniment sans
-  jamais atteindre `maxRetryCount` ni poser `needs-human`. Repéré deux fois avec le même
-  symptôme : #54 (un `pushBranch` non protégé par `try/catch` qui throw, ex. scope OAuth `workflow`
-  manquant, remontait jusqu'au try/catch générique de `runLoop` sans toucher `.harness/state.json`)
-  et #57 (l'échec générique "no new commit produced" dans `handleIssue` commentait et clearState
-  inconditionnellement, sans jamais appeler `retryFreshSprintOrGiveUp`). Le push d'un fixup de
-  review (PR déjà ouverte, rejouer le sprint n'aiderait pas) reste l'exception : il escalade
-  directement en commentaire + `markPullRequestNeedsHuman`.
+- 2026-07-18/19 (issues #54, #57, #55, #59) : dans `handleIssue`/`runReviewLoop` (`src/loop.ts`),
+  **tout** chemin d'échec de sprint doit passer par `retryFreshSprintOrGiveUp` (jamais
+  `commentOnIssue` + `clearState` directement) — sinon `retryCount` repart à 0 et le harnais boucle
+  indéfiniment sans jamais atteindre `maxRetryCount` ni poser `needs-human` (#54 : `pushBranch` non
+  protégé par `try/catch` ; #57 : "no new commit produced" traité hors du mécanisme borné). Deux
+  nuances court-circuitent ce retry borné plutôt que de le consommer : (1) un push rejeté pour scope
+  OAuth `workflow` manquant échoue identiquement à chaque essai — `isMissingWorkflowScopeError`
+  (`src/github.ts`) le détecte et escalade en `needs-human` dès le premier échec (#55) ; (2) un échec
+  de push potentiellement transitoire est d'abord retenté directement, sans nouveau sprint
+  (`pushBranchWithRetries`, `config.pushRetryCount`/`pushRetryDelayMs`, #59) — un push qui aurait
+  réussi au 2e essai gaspillait sinon un sprint entier à ne rien trouver à committer. Le push d'un
+  fixup de review (PR déjà ouverte) suit la même logique mais escalade directement (pas de nouveau
+  sprint) une fois `pushBranchWithRetries` épuisé.
 
 - 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
   par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la
   substitution au premier `}` non échappé rencontré, tronquant silencieusement du JSON contenant
   des objets. Assigner le défaut à une variable intermédiaire d'abord (`default=...; echo
 "${VAR:-$default}"`) plutôt que de l'inliner.
-
-- 2026-07-19 (issue #55) : nuance à la règle #54/#57 ci-dessus ("tout chemin d'échec passe par
-  `retryFreshSprintOrGiveUp`") — elle vaut pour les échecs _potentiellement transitoires_. Un push
-  rejeté pour scope OAuth `workflow` manquant sur `GH_TOKEN` échoue identiquement à chaque essai
-  (déterministe, pas transitoire) : retenter ne fait que gaspiller `maxRetryCount` sprints avant
-  d'atterrir au même endroit. `isMissingWorkflowScopeError`/`escalateMissingWorkflowScope`
-  (`src/github.ts`/`src/loop.ts`) détectent ce cas précis (regex sur le message d'erreur GitHub) et
-  escaladent en `needs-human` dès le premier échec, en court-circuitant le retry borné. Pattern
-  réutilisable : un échec de push confirmé déterministe (message d'erreur reconnaissable) mérite sa
-  propre détection plutôt que de payer le coût plein d'un cycle de retries connu d'avance pour
-  échouer.

@@ -120,6 +120,38 @@ async function escalateMissingWorkflowScope(
 }
 
 /**
+ * Retries {@link pushBranch} directly, up to `config.pushRetryCount` attempts with
+ * `config.pushRetryDelayMs` between them, before giving up. A push failure is often transient
+ * transport noise (a flaky server-side hook, a momentary network blip) or a root cause that's
+ * since been fixed (e.g. issue #55's missing `workflow` scope, once a human regenerates the
+ * token) - in both cases the commit already sitting locally is correct and complete, so retrying
+ * the push itself is far cheaper than falling back to a whole fresh issue-worker sprint, which
+ * would just find the working tree already clean and report "no new commit produced" (see issue
+ * #59). Stops immediately without spending remaining attempts when the failure is
+ * {@link isMissingWorkflowScopeError}: that one fails identically on every retry, so burning the
+ * local retry budget on it too would only delay the (already-immediate) needs-human escalation.
+ */
+async function pushBranchWithRetries(
+  branch: string,
+  cwd: string,
+  config: Config,
+  options: { noVerify?: boolean } = {},
+): Promise<void> {
+  for (let attempt = 1; attempt <= config.pushRetryCount; attempt += 1) {
+    try {
+      await pushBranch(branch, cwd, options);
+      return;
+    } catch (error) {
+      if (isMissingWorkflowScopeError(error) || attempt === config.pushRetryCount) throw error;
+      console.log(
+        `Push attempt ${attempt}/${config.pushRetryCount} failed for branch ${branch}, retrying push directly in ${config.pushRetryDelayMs}ms before falling back to a fresh sprint`,
+      );
+      await sleep(config.pushRetryDelayMs);
+    }
+  }
+}
+
+/**
  * Runs code-reviewer against the branch. code-reviewer merges directly once it decides a PR is
  * ready (see .claude/agents/code-reviewer.md - it can't formally --approve its own PR, so it
  * merges instead). If it's not ready, code-reviewer applies {@link NEEDS_FIXUP_LABEL} (not
@@ -169,17 +201,18 @@ async function runReviewLoop(
     }
 
     try {
-      await pushBranch(branch, cwd);
+      await pushBranchWithRetries(branch, cwd, config);
     } catch (error) {
-      // Unlike the budget-exceeded checkpoint push (which retries with a fresh sprint - see
-      // retryFreshSprintOrGiveUp), a PR already exists here and the fixup commit is already in
-      // place locally: retrying the sprint would redo already-finished work for no benefit if the
-      // push failure is persistent (e.g. issue #54 - a missing `workflow` OAuth scope rejects any
-      // push touching `.github/workflows/*` on every attempt). Escalate straight away instead of
-      // silently looping: left unguarded, this throw used to propagate out of runReviewLoop and
-      // get swallowed by runLoop's per-iteration try/catch, leaving state.json untouched so the
-      // next iteration retried the whole sprint from scratch, forever, without ever commenting or
-      // labeling the PR.
+      // pushBranchWithRetries already retried the push directly config.pushRetryCount times
+      // (issue #59) before this catch is reached. Unlike the budget-exceeded checkpoint push
+      // (which retries with a fresh sprint - see retryFreshSprintOrGiveUp), a PR already exists
+      // here and the fixup commit is already in place locally: re-invoking a whole sprint would
+      // redo already-finished work for no benefit if the push failure is persistent (e.g. issue
+      // #54 - a missing `workflow` OAuth scope rejects any push touching `.github/workflows/*` on
+      // every attempt). Escalate straight away instead of silently looping: left unguarded, this
+      // throw used to propagate out of runReviewLoop and get swallowed by runLoop's per-iteration
+      // try/catch, leaving state.json untouched so the next iteration retried the whole sprint
+      // from scratch, forever, without ever commenting or labeling the PR.
       console.error(`Failed to push fixup for issue #${issue.number}:`, error);
       const message = isMissingWorkflowScopeError(error)
         ? missingWorkflowScopeMessage()
@@ -331,7 +364,7 @@ async function handleIssue(
     try {
       // --no-verify: this is an admittedly-incomplete checkpoint, not finished agent work - it
       // must bypass the repo's own Husky pre-push (lint+test), which it would likely fail.
-      await pushBranch(branch, cwd, { noVerify: true });
+      await pushBranchWithRetries(branch, cwd, config, { noVerify: true });
     } catch (error) {
       console.error(`Failed to push WIP checkpoint for issue #${issue.number}:`, error);
       if (isMissingWorkflowScopeError(error)) {
@@ -356,18 +389,20 @@ async function handleIssue(
     await runReviewLoop(issue, branch, config, cwd);
   } else if (result.success) {
     try {
-      await pushBranch(branch, cwd);
+      await pushBranchWithRetries(branch, cwd, config);
     } catch (error) {
-      // Same reasoning as the WIP checkpoint push a few lines up: a push failure here used to
-      // propagate unguarded out of handleIssue, get swallowed by runLoop's per-iteration
-      // try/catch, and leave state.json untouched. The branch's local commit survived, so the
-      // next sprint saw nothing new to commit, commented "no new commit produced", cleared state,
-      // and the loop picked the same issue again from scratch - forever, without ever hitting
-      // maxRetryCount or posting needs-human (issue #54). Routing through retryFreshSprintOrGiveUp
-      // bounds the retries and escalates like every other push-failure path - except when it's a
-      // missing `workflow` OAuth scope rejecting a push touching `.github/workflows/*` (issue #55):
-      // that fails identically on every retry, so it skips the bounded-retry dance entirely and
-      // escalates immediately instead (see isMissingWorkflowScopeError/escalateMissingWorkflowScope).
+      // pushBranchWithRetries already retried the push directly config.pushRetryCount times
+      // (issue #59) - what's left below is what to do once even that's exhausted. Same reasoning
+      // as the WIP checkpoint push a few lines up: a push failure here used to propagate unguarded
+      // out of handleIssue, get swallowed by runLoop's per-iteration try/catch, and leave
+      // state.json untouched. The branch's local commit survived, so the next sprint saw nothing
+      // new to commit, commented "no new commit produced", cleared state, and the loop picked the
+      // same issue again from scratch - forever, without ever hitting maxRetryCount or posting
+      // needs-human (issue #54). Routing through retryFreshSprintOrGiveUp bounds the retries and
+      // escalates like every other push-failure path - except when it's a missing `workflow`
+      // OAuth scope rejecting a push touching `.github/workflows/*` (issue #55): that fails
+      // identically on every retry, so it skips the bounded-retry dance entirely and escalates
+      // immediately instead (see isMissingWorkflowScopeError/escalateMissingWorkflowScope).
       console.error(`Failed to push branch for issue #${issue.number}:`, error);
       if (isMissingWorkflowScopeError(error)) {
         await escalateMissingWorkflowScope(issue, config, cwd);

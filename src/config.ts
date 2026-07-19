@@ -19,6 +19,8 @@ export interface Config {
   baseRetryDelayMs: number;
   maxRetryDelayMs: number;
   maxRetryCount: number;
+  pushRetryCount: number;
+  pushRetryDelayMs: number;
 }
 
 function required(name: string): string {
@@ -44,5 +46,12 @@ export function loadConfig(): Config {
     baseRetryDelayMs: numberEnv('BASE_RETRY_DELAY_MS', 60_000),
     maxRetryDelayMs: numberEnv('MAX_RETRY_DELAY_MS', 3_600_000),
     maxRetryCount: numberEnv('MAX_RETRY_COUNT', 10),
+    // A `git push` failure is often transient transport noise (a flaky server-side hook, a
+    // momentary network blip) rather than a sign the commit itself is wrong - retrying the push
+    // directly a few times is far cheaper than falling back to a whole fresh issue-worker sprint,
+    // which would just find the working tree already correct and nothing new to commit (see
+    // issue #59).
+    pushRetryCount: numberEnv('PUSH_RETRY_COUNT', 3),
+    pushRetryDelayMs: numberEnv('PUSH_RETRY_DELAY_MS', 5_000),
   };
 }
