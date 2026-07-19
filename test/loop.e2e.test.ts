@@ -421,6 +421,61 @@ describe('runLoop end-to-end', () => {
     expect(existsSync(statePath)).toBe(false);
   });
 
+  it('escalates to needs-human immediately (no retries) when the push fails for a missing workflow OAuth scope (issue #55)', async () => {
+    // Unlike a generic push rejection (issue #54, tested above), GitHub's specific "missing
+    // `workflow` OAuth scope" rejection is deterministic - it fails identically on every retry
+    // until a human regenerates GH_TOKEN with the scope added - so it must skip the bounded
+    // retry-with-cap dance entirely and escalate on the very first attempt.
+    const issueEditMarker = join(tmpRoot, 'issue-edit-marker.txt');
+    process.env.FAKE_GH_ISSUE_EDIT_MARKER = issueEditMarker;
+    writeFileSync(
+      join(originDir, 'hooks/pre-receive'),
+      '#!/bin/sh\n' +
+        'echo "error: refusing to allow an OAuth App to create or update workflow ' +
+        '\\`.github/workflows/ci.yml\\` without \\`workflow\\` scope)" >&2\n' +
+        'exit 1\n',
+      { mode: 0o755 },
+    );
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+    };
+
+    // A single iteration is enough: with the old generic-retry behavior this would only save a
+    // retryCount of 1 and keep state.json around for another sprint (see the "falls back to a
+    // bounded retry ... (issue #54)" test above) - the fix escalates and clears state right away.
+    await runLoop(config, workDir, 1);
+
+    expect(existsSync(prMarker)).toBe(false);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('workflow');
+    expect(commentArgs).toContain('#55');
+
+    expect(existsSync(issueEditMarker)).toBe(true);
+    expect(readFileSync(issueEditMarker, 'utf-8')).toContain('needs-human');
+
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+
+    // The finished-work commit itself still exists locally even though the push failed.
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('Add feature.txt');
+  });
+
   it('retries with a fresh sprint when the agent reports success but produces no commit (issue #57)', async () => {
     process.env.FAKE_CLAUDE_NO_COMMIT = '1';
 

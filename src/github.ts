@@ -306,6 +306,31 @@ export async function pushBranch(
   await execFileAsync('git', args, { cwd });
 }
 
+/**
+ * Matches GitHub's rejection message for a push that touches `.github/workflows/*` without the
+ * OAuth `workflow` scope on the pushing token/PAT, e.g.:
+ * `refusing to allow an OAuth App to create or update workflow \`.github/workflows/ci.yml\`
+ * without \`workflow\` scope`. Used by {@link isMissingWorkflowScopeError}.
+ */
+const WORKFLOW_SCOPE_ERROR_PATTERN =
+  /refusing to allow an OAuth App to create or update workflow.*without\s+`workflow`\s+scope/is;
+
+/**
+ * Detects whether a failed `git push` (as thrown by {@link pushBranch}) was rejected specifically
+ * because `GH_TOKEN` lacks the OAuth `workflow` scope required to touch `.github/workflows/*`
+ * (see issue #55). Unlike a transient network blip or a flaky server-side hook, this rejection is
+ * deterministic - it fails identically on every retry until a human regenerates the token with
+ * the scope added - so callers can skip the bounded retry loop entirely and escalate straight to
+ * a human instead of burning `maxRetryCount` sprints on a push that can never succeed.
+ */
+export function isMissingWorkflowScopeError(error: unknown): boolean {
+  const stderr =
+    error !== null && typeof error === 'object' && 'stderr' in error
+      ? String((error as { stderr?: unknown }).stderr ?? '')
+      : '';
+  return WORKFLOW_SCOPE_ERROR_PATTERN.test(stderr);
+}
+
 /** Opens a PR for the branch via `gh`, referencing the issue so merging closes it. */
 export async function openPullRequest(
   repo: string,
