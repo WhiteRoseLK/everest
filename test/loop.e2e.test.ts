@@ -453,6 +453,55 @@ describe('runLoop end-to-end', () => {
     expect(issueWorkerEntries).toHaveLength(1);
   });
 
+  it('retries the push directly on the next sprint instead of re-invoking issue-worker for an already-committed but unpushed commit (issue #61)', async () => {
+    // Rejects only the very first push attempt across the whole issue, then succeeds from the
+    // second attempt onward - but unlike the issue #59 test above, pushRetryCount is 1 here, so
+    // the first sprint's pushBranchWithRetries doesn't retry internally: it exhausts immediately
+    // and falls back to a fresh sprint via retryFreshSprintOrGiveUp, leaving the finished commit
+    // sitting locally, unpushed. Before the fix, the second sprint blindly re-invoked
+    // issue-worker, which found nothing left to do and (depending on the agent) could report "no
+    // new commit produced" for work that was already correct and complete - wasting a sprint and
+    // a unit of retryCount on what was really just a push problem.
+    const counterFile = join(tmpRoot, 'push-attempt-counter');
+    writeFileSync(
+      join(originDir, 'hooks/pre-receive'),
+      `#!/bin/sh\ncount=$(( $(cat "${counterFile}" 2>/dev/null || echo 0) + 1 ))\necho "$count" > "${counterFile}"\n[ "$count" -ge 2 ]\n`,
+      { mode: 0o755 },
+    );
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+    };
+
+    // Two runLoop iterations: the first sprint commits and fails to push (exhausting its single
+    // pushRetryCount attempt), saving state for a second sprint. The second iteration resumes
+    // that state and should retry the push directly rather than spending another sprint.
+    await runLoop(config, workDir, 2);
+
+    // The second push attempt succeeded, so the PR was opened and state was cleared.
+    expect(existsSync(prMarker)).toBe(true);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+
+    // Only one issue-worker sprint ran across both iterations: the fix skips re-invoking
+    // issue-worker once it detects the branch already carries an unpushed, correct commit.
+    const costLog = loadCostLog(workDir);
+    const issueWorkerEntries = costLog.filter(
+      (entry) => entry.agent === 'issue-worker' && entry.label === 'issue-#1',
+    );
+    expect(issueWorkerEntries).toHaveLength(1);
+  });
+
   it('escalates to needs-human after maxRetryCount repeated push failures on finished work (issue #54)', async () => {
     writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 

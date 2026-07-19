@@ -45,26 +45,27 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   laisser du travail déjà `git add`é mais jamais committé. Si c'est correct/complet (relire le
   diff, `npm test`/`npm run lint`), le committer directement plutôt que de le refaire.
 
-- 2026-07-18 (issue #44) : pour un choix "heuristique déterministe vs. vrai jugement LLM" quand
-  l'appelant n'a pas toujours un LLM dans la boucle (`deriveIssueTitle`, `src/github.ts`) : donner
-  aux appelants qui _ont_ du jugement (l'agent `chat`, session LLM live) un paramètre explicite
-  pour court-circuiter l'heuristique (`--title` sur `everest ask` → `createIssuesFromMessage`),
-  plutôt que de forcer un shell-out `claude -p` coûteux pour le seul chemin CLI non-interactif, qui
-  garde l'heuristique (améliorée : filler-stripping) comme fallback raisonnable.
+- 2026-07-18 (issue #44) : `deriveIssueTitle` (`src/github.ts`) reste une heuristique (pas de
+  shell-out `claude -p`) ; les appelants qui ont un vrai LLM dans la boucle (agent `chat`) passent
+  `--title` pour la court-circuiter plutôt que de forcer tout le monde à payer un appel LLM.
 
-- 2026-07-18/19 (issues #54, #57, #55, #59) : dans `handleIssue`/`runReviewLoop` (`src/loop.ts`),
-  **tout** chemin d'échec de sprint doit passer par `retryFreshSprintOrGiveUp` (jamais
-  `commentOnIssue` + `clearState` directement) — sinon `retryCount` repart à 0 et le harnais boucle
-  indéfiniment sans jamais atteindre `maxRetryCount` ni poser `needs-human` (#54 : `pushBranch` non
-  protégé par `try/catch` ; #57 : "no new commit produced" traité hors du mécanisme borné). Deux
-  nuances court-circuitent ce retry borné plutôt que de le consommer : (1) un push rejeté pour scope
-  OAuth `workflow` manquant échoue identiquement à chaque essai — `isMissingWorkflowScopeError`
-  (`src/github.ts`) le détecte et escalade en `needs-human` dès le premier échec (#55) ; (2) un échec
-  de push potentiellement transitoire est d'abord retenté directement, sans nouveau sprint
-  (`pushBranchWithRetries`, `config.pushRetryCount`/`pushRetryDelayMs`, #59) — un push qui aurait
-  réussi au 2e essai gaspillait sinon un sprint entier à ne rien trouver à committer. Le push d'un
-  fixup de review (PR déjà ouverte) suit la même logique mais escalade directement (pas de nouveau
-  sprint) une fois `pushBranchWithRetries` épuisé.
+- 2026-07-18/19 (issues #54, #57, #55, #59, #61) : dans `handleIssue`/`runReviewLoop`
+  (`src/loop.ts`), **tout** chemin d'échec de sprint doit passer par `retryFreshSprintOrGiveUp`
+  (jamais `commentOnIssue` + `clearState` directement) — sinon `retryCount` repart à 0 et le
+  harnais boucle indéfiniment sans jamais atteindre `maxRetryCount` ni poser `needs-human` (#54 :
+  `pushBranch` non protégé par `try/catch` ; #57 : "no new commit produced" traité hors du
+  mécanisme borné). Plusieurs nuances court-circuitent ce retry borné plutôt que de le consommer :
+  (1) un push rejeté pour scope OAuth `workflow` manquant échoue identiquement à chaque essai —
+  `isMissingWorkflowScopeError` (`src/github.ts`) le détecte et escalade en `needs-human` dès le
+  premier échec (#55) ; (2) un échec de push potentiellement transitoire est d'abord retenté
+  directement, sans nouveau sprint (`pushBranchWithRetries`, `config.pushRetryCount`/
+  `pushRetryDelayMs`, #59) ; (3) quand `pushBranchWithRetries` finit par s'épuiser malgré tout et
+  qu'un nouveau sprint est lancé, `handleIssue` vérifie d'abord `hasUnpushedCommit` (`src/github.ts`)
+  avant de rappeler `issue-worker` — s'il y a déjà un commit local en avance sur `origin` (un sprint
+  précédent a réussi mais son push a échoué), on retente juste le push plutôt que de relancer
+  l'agent, qui ne trouverait rien à faire et rapporterait à tort "no new commit produced" (#61).
+  Le push d'un fixup de review (PR déjà ouverte) suit la même logique (2) mais escalade directement
+  (pas de nouveau sprint) une fois `pushBranchWithRetries` épuisé.
 
 - 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
   par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la

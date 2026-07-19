@@ -261,6 +261,14 @@ export async function remoteMainCommit(cwd: string): Promise<string> {
 }
 
 /**
+ * Prefix used for harness-authored WIP checkpoint commit messages (see
+ * {@link commitWorkInProgress}). Shared with {@link isUnpushedCommitWipCheckpoint} so a retried
+ * push (see {@link hasUnpushedCommit}) can tell whether it needs `--no-verify`, matching whichever
+ * flag the original, failed push attempt used.
+ */
+export const WIP_CHECKPOINT_PREFIX = 'WIP checkpoint:';
+
+/**
  * Commits any uncommitted changes as a checkpoint (harness-authored, not gated by the quality
  * hooks that apply to agent commits - it's explicitly WIP, not a finished unit of work), so
  * progress survives a budget-exhausted sprint instead of being discarded. Returns whether there
@@ -329,6 +337,36 @@ export function isMissingWorkflowScopeError(error: unknown): boolean {
       ? String((error as { stderr?: unknown }).stderr ?? '')
       : '';
   return WORKFLOW_SCOPE_ERROR_PATTERN.test(stderr);
+}
+
+/**
+ * Returns whether `branch`'s local HEAD already carries a commit that `origin` doesn't have yet
+ * - either because `origin` has no ref for the branch at all, or its ref points somewhere else.
+ * Lets callers tell "a prior sprint's commit is already correct/complete but stuck locally
+ * because its push failed" apart from "no commit exists yet on this branch" (fresh branch, or a
+ * sprint that genuinely produced nothing): re-invoking issue-worker in the former case finds
+ * nothing left to do and misreports "no new commit produced" for work that was actually already
+ * finished - see issue #61. Returns `false` when HEAD matches `origin/main`, i.e. no commit has
+ * been made on the branch yet.
+ */
+export async function hasUnpushedCommit(branch: string, cwd: string): Promise<boolean> {
+  const [local, main] = await Promise.all([currentCommit(cwd), remoteMainCommit(cwd)]);
+  if (local === main) return false;
+
+  const { stdout } = await execFileAsync('git', ['ls-remote', 'origin', branch], { cwd });
+  const remote = stdout.split(/\s+/)[0]?.trim() ?? '';
+  return remote !== local;
+}
+
+/**
+ * Returns whether the branch's current HEAD is a harness-authored WIP checkpoint commit (see
+ * {@link commitWorkInProgress}) rather than a finished commit produced by issue-worker. Used
+ * alongside {@link hasUnpushedCommit} to decide whether retrying its push needs `--no-verify`,
+ * matching whichever flag the original (failed) push attempt used.
+ */
+export async function isUnpushedCommitWipCheckpoint(cwd: string): Promise<boolean> {
+  const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%s'], { cwd });
+  return stdout.trim().startsWith(WIP_CHECKPOINT_PREFIX);
 }
 
 /** Opens a PR for the branch via `gh`, referencing the issue so merging closes it. */

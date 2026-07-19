@@ -19,6 +19,9 @@ import {
   commitWorkInProgress,
   remoteMainCommit,
   isMissingWorkflowScopeError,
+  hasUnpushedCommit,
+  isUnpushedCommitWipCheckpoint,
+  WIP_CHECKPOINT_PREFIX,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -302,6 +305,49 @@ async function handleIssue(
     );
   }
 
+  if (await hasUnpushedCommit(branch, cwd)) {
+    // A prior sprint on this branch already produced a commit, but its push failed (see the
+    // pushBranchWithRetries call sites below - this is what leaves state.json pointing at a
+    // branch in exactly this state). That commit is still correct/complete, it's just stuck
+    // locally: re-invoking issue-worker here would find nothing left to do and report "no new
+    // commit produced" for work that was actually already finished, burning a whole sprint and a
+    // unit of retryCount on what's really just a push problem, not an agent problem (issue #61).
+    // Retry the push directly instead. --no-verify only if the stuck commit is a WIP checkpoint
+    // (see commitWorkInProgress) - a finished agent commit should still go through the normal
+    // lint/test pre-push hook, same as it would on its first push attempt.
+    const noVerify = await isUnpushedCommitWipCheckpoint(cwd);
+    console.log(
+      `Issue #${issue.number}: branch ${branch} already has an unpushed commit from a prior sprint, retrying its push instead of re-invoking issue-worker`,
+    );
+
+    try {
+      await pushBranchWithRetries(branch, cwd, config, { noVerify });
+    } catch (error) {
+      console.error(`Failed to push previously committed work for issue #${issue.number}:`, error);
+      if (isMissingWorkflowScopeError(error)) {
+        await escalateMissingWorkflowScope(issue, config, cwd);
+        return;
+      }
+      await retryFreshSprintOrGiveUp(
+        issue,
+        branch,
+        config,
+        cwd,
+        retryCount,
+        'failed to push a previously committed but unpushed commit',
+      );
+      return;
+    }
+
+    if (!(await hasOpenPullRequest(config.githubRepo, branch))) {
+      await openPullRequest(config.githubRepo, issue, branch, cwd);
+      console.log(`Opened PR for issue #${issue.number}`);
+    }
+    await runReviewLoop(issue, branch, config, cwd);
+    clearState(cwd);
+    return;
+  }
+
   const result: ClaudeResult = await runClaudeCode(
     buildPrompt(issue, cwd),
     cwd,
@@ -342,7 +388,7 @@ async function handleIssue(
     // "not done yet" situation) decide whether to continue, rather than abandoning the issue.
     const committed = await commitWorkInProgress(
       cwd,
-      `WIP checkpoint: issue #${issue.number} (budget reached)`,
+      `${WIP_CHECKPOINT_PREFIX} issue #${issue.number} (budget reached)`,
     );
 
     if (!committed) {
