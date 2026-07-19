@@ -27,6 +27,7 @@ import {
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
 import { buildPrompt, buildFixupPrompt } from './prompt.js';
+import { recordIterationError } from './diagnostics.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -523,11 +524,20 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
     const issues = await listOpenIssues(config.githubRepo);
     const issue = issues.find((candidate) => candidate.number === state.issueNumber) ?? null;
     if (!issue) {
-      await sleep(config.pollIntervalMs);
+      // The in-progress issue is no longer open (closed by hand, or its PR merged and the issue
+      // auto-closed while state.json still pointed at it). Leaving the stale checkpoint in place
+      // made this branch fire every poll forever - `issue` stays null, so the loop just slept and
+      // returned without ever clearing state or looking at any *other* eligible issue: the whole
+      // loop was alive but permanently stuck on a ghost issue, invisible from the outside (issue
+      // #82). Clear the dead checkpoint and fall through to normal issue selection instead.
+      console.log(
+        `Issue #${state.issueNumber} in state.json is no longer open; clearing stale checkpoint and resuming normal selection`,
+      );
+      clearState(cwd);
+    } else {
+      await handleIssue(issue, state, config, cwd);
       return;
     }
-    await handleIssue(issue, state, config, cwd);
-    return;
   }
 
   if (await resumePendingReview(config, cwd)) return;
@@ -620,6 +630,11 @@ export async function runLoop(
     } catch (error) {
       console.error('Unhandled error during loop iteration, continuing after a short delay:');
       console.error(error);
+      // Also persist it under .harness/ (best-effort): the container's stdout isn't reachable
+      // once the harness is pid 1, so a console.error alone is invisible from `everest chat`.
+      // This durable trace is what makes a silent-stall episode diagnosable after the fact via
+      // `everest doctor`, without needing docker access (issue #82).
+      recordIterationError(error, cwd);
       await sleep(config.pollIntervalMs);
     }
   }

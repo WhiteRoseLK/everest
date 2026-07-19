@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -266,6 +266,46 @@ describe('runLoop end-to-end', () => {
     await runLoop(config, workDir, 2);
 
     expect(existsSync(prMarker)).toBe(true);
+  });
+
+  it('clears a stale state.json pointing at a no-longer-open issue instead of stalling forever (issue #82)', async () => {
+    // A prior run left state.json pointing at issue #999, which is no longer in the open-issue
+    // list (closed by hand, or its PR merged and the issue auto-closed). Before the fix, runIteration
+    // saw `issue === null` and just slept+returned every poll, never clearing the checkpoint and
+    // never looking at the actually-eligible issue #1 - the loop was alive but permanently stuck.
+    const statePath = join(workDir, '.harness/state.json');
+    mkdirSync(join(workDir, '.harness'), { recursive: true });
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        issueNumber: 999,
+        branch: 'harness/issue-999-gone',
+        startedAt: '2026-07-19T00:00:00Z',
+        retryCount: 0,
+      }),
+    );
+    // Default FAKE_GH_ISSUE_LIST returns only issue #1 (see fixtures/fake-bin/gh), so #999 is absent.
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The stale checkpoint is gone and the harness resumed normal selection: issue #1 got a PR.
+    expect(existsSync(statePath)).toBe(false);
+    expect(existsSync(prMarker)).toBe(true);
+    expect(readFileSync(prMarker, 'utf-8')).toContain('Test issue');
   });
 
   it('checkpoints WIP progress and hands off to review when the sprint budget is exhausted', async () => {
