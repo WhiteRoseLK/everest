@@ -14,6 +14,8 @@ log() {
   echo "==> $*"
 }
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
     echo "Docker n'est pas installé. Voir la section 'Prérequis' du README pour l'installer, puis relance ce script." >&2
@@ -43,17 +45,52 @@ ensure_env_file() {
   exit 0
 }
 
-start_harness() {
-  log "Démarrage du conteneur harness (docker compose up -d --build)..."
-  docker compose up -d --build harness
-  log "Harnais démarré. Logs : docker compose logs -f harness"
+start_everest() {
+  log "Démarrage du conteneur Everest (docker compose up -d --build)..."
+  docker compose --project-directory "$REPO_DIR" up -d --build harness
+  log "Everest est démarré."
+}
+
+# Résout le fichier de config de l'interpréteur de l'opérateur (pas celui de ce script, qui
+# tourne en bash même si l'opérateur est sous zsh) pour y ajouter l'alias `everest`.
+shell_rc_file() {
+  case "$(basename "${SHELL:-bash}")" in
+    zsh) echo "$HOME/.zshrc" ;;
+    *) echo "$HOME/.bashrc" ;;
+  esac
+}
+
+# Ajoute un alias `everest` qui exécute la CLI *dans* le conteneur (`docker compose exec`)
+# plutôt que sur l'hôte : l'hôte n'a que Docker (voir Prérequis), pas Node, donc `node
+# bin/everest.js` ne peut tourner que côté conteneur, qui l'embarque déjà (voir Dockerfile).
+# Idempotent : ne réécrit rien si l'alias est déjà présent.
+ensure_alias() {
+  local rc_file
+  rc_file="$(shell_rc_file)"
+  local alias_line="alias everest='docker compose --project-directory \"$REPO_DIR\" exec harness node bin/everest.js'"
+
+  if [ -f "$rc_file" ] && grep -qF "alias everest=" "$rc_file"; then
+    log "Alias 'everest' déjà présent dans $rc_file."
+    return
+  fi
+
+  {
+    echo ""
+    echo "# Ajouté par everest/setup.sh : interagir avec Everest via 'everest' (status/ask/chat/...)"
+    echo "$alias_line"
+  } >>"$rc_file"
+  log "Alias 'everest' ajouté à $rc_file."
+  echo "Lance 'source $rc_file' (ou ouvre un nouveau terminal) pour l'utiliser dans cette session." >&2
 }
 
 main() {
   ensure_docker
   ensure_compose
   ensure_env_file
-  start_harness
+  start_everest
+  ensure_alias
+  echo
+  echo "Pour interagir avec Everest, lance simplement : everest"
 }
 
 main "$@"

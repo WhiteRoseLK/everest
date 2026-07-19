@@ -265,37 +265,49 @@ function ensureHarnessContainer(cwd: string): void {
  * mode plus blanket permission bypass is a package deal confined to the container, and `-it`
  * makes this an interactive TTY session rather than headless, but the confinement is what makes
  * bypassing approval prompts acceptable, not the human's presence at the keyboard).
+ *
+ * When `EVEREST_IN_CONTAINER` is set (see `Dockerfile`), this process is already running inside
+ * the harness container itself - the case where the operator's shell `everest` alias runs
+ * `docker compose exec harness node bin/everest.js "$@"` for every subcommand, chat included
+ * (see `setup.sh`). Nesting another `docker compose exec` from in there would need a Docker
+ * client and socket that the image deliberately doesn't have, so this instead skips straight to
+ * spawning `claude` in the current process rather than wrapping it in a second container hop.
  */
 export function runChat(repo: string, cwd: string = REPO_ROOT): number {
   const systemPromptAppend =
-    `You are "everest chat", the conversational interface for the everest harness in ` +
-    `repository ${repo}. Use the gh CLI (already authenticated, scoped to --repo ${repo}) to ` +
-    `answer questions about harness status (open PRs, review-loop state), blockers (PRs ` +
-    `labeled needs-human), and to file new issues on the user's behalf when asked - mirroring ` +
-    `'everest status', 'everest blockers' and 'everest ask'. When asked something like "what did ` +
-    `I miss" or "what's the status", proactively run 'node bin/everest.js catchup' (from /app) ` +
-    `instead of just answering literally - it gives a team-style summary since the user last ` +
-    `checked in and always ends with an explicit "needs you" call-out. Keep answers short and ` +
-    `terminal-friendly.`;
+    `You are "everest chat", the conversational interface for everest in repository ${repo}. ` +
+    `Use the gh CLI (already authenticated, scoped to --repo ${repo}) to answer questions about ` +
+    `everest's status (open PRs, review-loop state), blockers (PRs labeled needs-human), and to ` +
+    `file new issues on the user's behalf when asked - mirroring 'everest status', 'everest ` +
+    `blockers' and 'everest ask'. When asked something like "what did I miss" or "what's the ` +
+    `status", proactively run 'node bin/everest.js catchup' (from /app) instead of just ` +
+    `answering literally - it gives a team-style summary since the user last checked in and ` +
+    `always ends with an explicit "needs you" call-out. Keep answers short and terminal-friendly.`;
+
+  const claudeArgs = [
+    '--agent',
+    'chat',
+    '--permission-mode',
+    'bypassPermissions',
+    '--append-system-prompt',
+    systemPromptAppend,
+  ];
+
+  if (process.env.EVEREST_IN_CONTAINER) {
+    const result = spawnSync('claude', claudeArgs, { cwd, stdio: 'inherit' });
+    if (result.error) throw result.error;
+    return result.status ?? 0;
+  }
 
   ensureHarnessContainer(cwd);
 
   const result = spawnSync(
     'docker',
-    [
-      'compose',
-      'exec',
-      '-it',
-      'harness',
-      'claude',
-      '--agent',
-      'chat',
-      '--permission-mode',
-      'bypassPermissions',
-      '--append-system-prompt',
-      systemPromptAppend,
-    ],
-    { cwd, stdio: 'inherit' },
+    ['compose', 'exec', '-it', 'harness', 'claude', ...claudeArgs],
+    {
+      cwd,
+      stdio: 'inherit',
+    },
   );
   if (result.error) throw result.error;
   return result.status ?? 0;

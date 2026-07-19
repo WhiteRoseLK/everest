@@ -41,6 +41,25 @@ describe('setup.sh', () => {
   });
 
   it('starts the harness service via docker compose', () => {
-    expect(script).toMatch(/docker compose up -d --build harness/);
+    expect(script).toMatch(/docker compose .*up -d --build harness/);
+  });
+
+  it('refers to the running product as Everest, not "harnais", in its own output', () => {
+    expect(script).toMatch(/Everest est démarré/);
+    expect(script).not.toMatch(/Harnais démarré/);
+  });
+
+  /**
+   * Regression test: the operator asked for a one-command way to talk to Everest (`everest`)
+   * without needing Node on the host, since the host's only prerequisite is Docker (see README).
+   * setup.sh installs a shell alias that routes through the container instead.
+   */
+  it('installs an `everest` shell alias that runs the CLI inside the container', () => {
+    expect(script).toMatch(/alias everest=/);
+    expect(script).toMatch(/docker compose .*exec harness node bin\/everest\.js/);
+  });
+
+  it('is idempotent about the alias: skips re-adding it if already present', () => {
+    expect(script).toMatch(/grep -qF "alias everest=" "\$rc_file"/);
   });
 });

@@ -13,6 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code
 
+# Lets code running inside the container (see runChat in src/cli.ts) tell it's already sandboxed
+# here, so `everest chat` skips nesting another `docker compose exec` hop - the image has no
+# Docker client/socket to do that with - and instead runs `claude` directly in this process.
+ENV EVEREST_IN_CONTAINER=1
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./

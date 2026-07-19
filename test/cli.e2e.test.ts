@@ -39,6 +39,7 @@ describe('everest CLI end-to-end', () => {
     delete process.env.FAKE_GH_PR_LIST_FAIL_ONCE;
     delete process.env.FAKE_CLAUDE_CHAT_EXIT_CODE;
     delete process.env.FAKE_DOCKER_COMPOSE_UP_EXIT_CODE;
+    delete process.env.EVEREST_IN_CONTAINER;
     rmSync(CHAT_MARKER, { force: true });
     rmSync(DOCKER_COMPOSE_UP_MARKER, { force: true });
     logSpy.mockRestore();
@@ -176,6 +177,23 @@ describe('everest CLI end-to-end', () => {
     expect(() => runChat('fake/repo')).toThrow(/Failed to start the harness Docker container/);
     // Since the container never came up, claude inside it must never have been invoked.
     expect(existsSync(CHAT_MARKER)).toBe(false);
+  });
+
+  it('chat runs claude directly, without another docker hop, when already inside the container', () => {
+    // Mirrors how the `everest` shell alias installed by setup.sh invokes the CLI: `docker
+    // compose exec harness node bin/everest.js chat` already puts this process inside the
+    // container, so it must not try to nest a second `docker compose exec` (the image has no
+    // Docker client/socket to do that with) - see EVEREST_IN_CONTAINER in Dockerfile.
+    process.env.EVEREST_IN_CONTAINER = '1';
+
+    const status = runChat('fake/repo');
+
+    expect(status).toBe(0);
+    expect(existsSync(DOCKER_COMPOSE_UP_MARKER)).toBe(false);
+    expect(existsSync(CHAT_MARKER)).toBe(true);
+    const args = readFileSync(CHAT_MARKER, 'utf-8');
+    expect(args).toContain('--agent chat');
+    expect(args).toContain('--permission-mode bypassPermissions');
   });
 
   it('bare `everest` (no subcommand) opens chat the same as `everest chat`', async () => {
