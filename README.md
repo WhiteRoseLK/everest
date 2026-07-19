@@ -2,13 +2,47 @@
 
 Harnais léger d'orchestration Claude Code. Lit un backlog GitHub Issues, traite les issues une par une (features + bugs) en invoquant Claude Code en mode headless, impose des tests E2E, et ouvre des PR.
 
+## Prérequis
+
+- [Docker Engine](https://docs.docker.com/engine/install/) + le plugin Compose (`docker compose version`
+  doit fonctionner). Rien d'autre : Node, npm et `gh` sont déjà embarqués dans l'image du conteneur
+  `harness` (voir `Dockerfile`), donc inutile de les installer sur l'hôte.
+
 ## Setup
+
+Une fois Docker installé :
+
+```
+git clone https://github.com/WhiteRoseLK/everest.git
+cd everest
+./setup.sh
+```
+
+`setup.sh` vérifie que Docker/Docker Compose sont bien présents (sinon il s'arrête en pointant vers
+la section "Prérequis" ci-dessus), crée `.env` depuis `.env.example` s'il n'existe pas encore (le
+script s'arrête alors le temps que tu renseignes `GITHUB_REPO`/`CLAUDE_CODE_OAUTH_TOKEN`/`GH_TOKEN`),
+puis lance `docker compose up -d --build harness`. Relance simplement `./setup.sh` une fois `.env`
+rempli.
+
+Le conteneur `harness` tourne en boucle continue (`restart: unless-stopped`, voir
+`docker-compose.yml`) : tant qu'il est up, everest continue de traiter les issues ouvertes du repo
+au fil de l'eau — pas de déploiement à répéter à chaque issue, tant que le budget de tokens/API
+suit (voir "Budget Policy" dans `CLAUDE.md`). `docker compose logs -f harness` pour suivre
+l'activité, `docker compose down` pour arrêter.
+
+### Dev local sans Docker
+
+Pour itérer sur le code du harnais lui-même sans repasser par l'image Docker à chaque changement :
 
 ```
 npm install
-cp .env.example .env  # déjà fait en local, ajuster si besoin
+cp .env.example .env  # ajuster les valeurs
 npm start
 ```
+
+Nécessite alors Node.js et `gh` installés et authentifiés sur l'hôte. Ce chemin ne bénéficie pas
+du confinement `bypassPermissions` ni de l'auto-redémarrage sur merge de `main` (voir "Known
+Pitfalls" dans `CLAUDE.md`) — réservé au développement, pas à un déploiement long-terme.
 
 ## CLI
 
