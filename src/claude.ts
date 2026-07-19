@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { currentCommit, setGitIdentity } from './github.js';
+import { hasUnpushedCommit, setGitIdentity } from './github.js';
 import { memorySection } from './prompt.js';
 import { recordCost } from './cost.js';
 
@@ -176,22 +176,31 @@ async function runAgent(
 
 /**
  * Runs the `issue-worker` subagent against one issue prompt and reports whether it produced a
- * new commit, hit a rate limit, or failed outright. `label` tags the recorded cost entry (see
- * `recordCost`) - callers typically pass something identifying the issue, e.g. `issue-#42`.
+ * commit that still needs to reach `origin`, hit a rate limit, or failed outright. `label` tags
+ * the recorded cost entry (see `recordCost`) - callers typically pass something identifying the
+ * issue, e.g. `issue-#42`.
+ *
+ * Success is judged via {@link hasUnpushedCommit} on `branch` - whether HEAD carries something
+ * `origin` doesn't have yet - rather than comparing HEAD immediately before and after this
+ * specific invocation. The naive before/after comparison misreported "no new commit produced"
+ * whenever this sprint resumed a branch that already had a correct, complete commit from an
+ * earlier sprint whose *push* had failed (or the process restarted before it got there, e.g.
+ * issue #43): `commitBefore` was already the surviving commit, so an agent invocation that
+ * (correctly) found nothing left to add looked identical to one that genuinely did nothing -
+ * see issue #64. Checking against `origin` instead treats "there's unpushed work on this branch"
+ * as success regardless of which sprint produced it.
  */
 export async function runClaudeCode(
   prompt: string,
   cwd: string,
   maxBudgetUsd: number,
   label: string,
+  branch: string,
 ): Promise<ClaudeResult> {
-  const commitBefore = await currentCommit(cwd);
-
   const result = await runAgent('issue-worker', prompt, cwd, maxBudgetUsd, label);
   if (!result.success) return result;
 
-  const commitAfter = await currentCommit(cwd);
-  const hasNewCommit = commitAfter !== commitBefore;
+  const hasNewCommit = await hasUnpushedCommit(branch, cwd);
 
   return {
     success: hasNewCommit,

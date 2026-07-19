@@ -502,6 +502,96 @@ describe('runLoop end-to-end', () => {
     expect(issueWorkerEntries).toHaveLength(1);
   });
 
+  it('pushes a fixup commit that already exists locally even when the fixup sprint itself adds nothing further (issue #64)', async () => {
+    // Simulates resuming a needs-fixup review cycle whose commit was already made by a previous
+    // (interrupted) sprint - e.g. the harness restarted (issue #43) between the fixup commit and
+    // its push. Before the fix, runClaudeCode (src/claude.ts) compared HEAD immediately before
+    // this specific invocation against HEAD after: since the fixup commit already existed before
+    // the agent ran, an invocation that (correctly) found nothing further to change reported "no
+    // new commit produced" and the already-correct fixup was silently dropped, never reaching
+    // origin.
+    process.env.FAKE_CLAUDE_NO_COMMIT = '1';
+
+    // Set up the branch as an already-open PR (base commit pushed)...
+    git(['checkout', '-b', 'harness/issue-1-test-issue'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'existing PR commit',
+      ],
+      workDir,
+    );
+    git(['push', '-u', 'origin', 'harness/issue-1-test-issue'], workDir);
+    // ...then add a fixup commit locally that never made it to origin, as if a prior sprint's
+    // push had failed (or the process restarted) right after committing.
+    writeFileSync(join(workDir, 'fixed.txt'), 'addressed review feedback\n');
+    git(['add', 'fixed.txt'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '-m',
+        'Address review feedback',
+      ],
+      workDir,
+    );
+    git(['checkout', 'main'], workDir);
+
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      {
+        headRefName: 'harness/issue-1-test-issue',
+        labels: [{ name: 'needs-fixup' }],
+      },
+    ]);
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({
+      state: 'OPEN',
+      labels: [{ name: 'needs-fixup' }],
+    });
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 2,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The pre-existing fixup commit reached origin during the first review cycle, even though
+    // that cycle's fixup invocation (FAKE_CLAUDE_NO_COMMIT) added nothing further itself.
+    const localHead = execFileSync('git', ['rev-parse', 'harness/issue-1-test-issue'], {
+      cwd: workDir,
+      encoding: 'utf-8',
+    }).trim();
+    const remoteHead = execFileSync('git', ['rev-parse', 'harness/issue-1-test-issue'], {
+      cwd: originDir,
+      encoding: 'utf-8',
+    }).trim();
+    expect(remoteHead).toBe(localHead);
+
+    const log = execFileSync('git', ['log', '--oneline', 'harness/issue-1-test-issue'], {
+      cwd: originDir,
+      encoding: 'utf-8',
+    });
+    expect(log).toContain('Address review feedback');
+  });
+
   it('escalates to needs-human after maxRetryCount repeated push failures on finished work (issue #54)', async () => {
     writeFileSync(join(originDir, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
 
