@@ -18,6 +18,7 @@ import {
   markIssueNeedsHuman,
   commitWorkInProgress,
   remoteMainCommit,
+  isMissingWorkflowScopeError,
   type Issue,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
@@ -83,6 +84,42 @@ function filterOutIssuesNeedingHuman(issues: Issue[]): Issue[] {
 }
 
 /**
+ * Builds the comment posted when a push fails specifically because `GH_TOKEN` lacks the OAuth
+ * `workflow` scope (see {@link isMissingWorkflowScopeError} in github.ts / issue #55). Shared by
+ * every push-failure catch below so the actionable ask (regenerate the token with the scope
+ * added) is worded consistently regardless of which push failed.
+ */
+function missingWorkflowScopeMessage(): string {
+  return (
+    "Le push a été rejeté car `GH_TOKEN` n'a pas le scope OAuth `workflow` (nécessaire pour " +
+    'toute branche touchant `.github/workflows/*`) — intervention humaine nécessaire pour ' +
+    'régénérer le token avec ce scope (voir #55).'
+  );
+}
+
+/**
+ * Escalates straight to needs-human when a push failed specifically due to a missing `workflow`
+ * OAuth scope, instead of routing through {@link retryFreshSprintOrGiveUp}'s bounded-retry
+ * mechanism: unlike a transient failure, this rejection is deterministic - it fails identically
+ * on every retry - so retrying would just burn up to `maxRetryCount` sprints on a push that can
+ * never succeed until a human regenerates the token (see issue #55). No PR exists yet at either
+ * call site (both catches sit before {@link openPullRequest}), so only the issue itself is
+ * labeled and commented on.
+ */
+async function escalateMissingWorkflowScope(
+  issue: Issue,
+  config: Config,
+  cwd: string,
+): Promise<void> {
+  console.log(
+    `Issue #${issue.number}: push rejected for missing 'workflow' OAuth scope on GH_TOKEN, escalating immediately instead of retrying (issue #55)`,
+  );
+  await commentOnIssue(config.githubRepo, issue, missingWorkflowScopeMessage());
+  await markIssueNeedsHuman(config.githubRepo, issue);
+  clearState(cwd);
+}
+
+/**
  * Runs code-reviewer against the branch. code-reviewer merges directly once it decides a PR is
  * ready (see .claude/agents/code-reviewer.md - it can't formally --approve its own PR, so it
  * merges instead). If it's not ready, code-reviewer applies {@link NEEDS_FIXUP_LABEL} (not
@@ -144,11 +181,10 @@ async function runReviewLoop(
       // next iteration retried the whole sprint from scratch, forever, without ever commenting or
       // labeling the PR.
       console.error(`Failed to push fixup for issue #${issue.number}:`, error);
-      await commentOnIssue(
-        config.githubRepo,
-        issue,
-        `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`,
-      );
+      const message = isMissingWorkflowScopeError(error)
+        ? missingWorkflowScopeMessage()
+        : `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`;
+      await commentOnIssue(config.githubRepo, issue, message);
       await markPullRequestNeedsHuman(config.githubRepo, branch);
       await markIssueNeedsHuman(config.githubRepo, issue);
       return;
@@ -298,6 +334,10 @@ async function handleIssue(
       await pushBranch(branch, cwd, { noVerify: true });
     } catch (error) {
       console.error(`Failed to push WIP checkpoint for issue #${issue.number}:`, error);
+      if (isMissingWorkflowScopeError(error)) {
+        await escalateMissingWorkflowScope(issue, config, cwd);
+        return;
+      }
       await retryFreshSprintOrGiveUp(
         issue,
         branch,
@@ -318,15 +358,21 @@ async function handleIssue(
     try {
       await pushBranch(branch, cwd);
     } catch (error) {
-      // Same reasoning as the WIP checkpoint push a few lines up: a push failure here (e.g. issue
-      // #54 - a missing `workflow` OAuth scope rejects any push touching `.github/workflows/*`)
-      // used to propagate unguarded out of handleIssue, get swallowed by runLoop's per-iteration
+      // Same reasoning as the WIP checkpoint push a few lines up: a push failure here used to
+      // propagate unguarded out of handleIssue, get swallowed by runLoop's per-iteration
       // try/catch, and leave state.json untouched. The branch's local commit survived, so the
       // next sprint saw nothing new to commit, commented "no new commit produced", cleared state,
       // and the loop picked the same issue again from scratch - forever, without ever hitting
-      // maxRetryCount or posting needs-human. Routing through retryFreshSprintOrGiveUp bounds the
-      // retries and escalates like every other push-failure path.
+      // maxRetryCount or posting needs-human (issue #54). Routing through retryFreshSprintOrGiveUp
+      // bounds the retries and escalates like every other push-failure path - except when it's a
+      // missing `workflow` OAuth scope rejecting a push touching `.github/workflows/*` (issue #55):
+      // that fails identically on every retry, so it skips the bounded-retry dance entirely and
+      // escalates immediately instead (see isMissingWorkflowScopeError/escalateMissingWorkflowScope).
       console.error(`Failed to push branch for issue #${issue.number}:`, error);
+      if (isMissingWorkflowScopeError(error)) {
+        await escalateMissingWorkflowScope(issue, config, cwd);
+        return;
+      }
       await retryFreshSprintOrGiveUp(
         issue,
         branch,

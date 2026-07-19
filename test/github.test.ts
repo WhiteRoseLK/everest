@@ -11,6 +11,7 @@ import {
   inferLabels,
   formatIssueBody,
   createIssuesFromMessage,
+  isMissingWorkflowScopeError,
 } from '../src/github.js';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
@@ -154,6 +155,29 @@ describe('commitWorkInProgress', () => {
     });
     expect(tracked).not.toContain('.harness');
     expect(tracked).toContain('file.txt');
+  });
+});
+
+describe('isMissingWorkflowScopeError', () => {
+  it('recognizes the exact rejection GitHub sends for a missing workflow OAuth scope', () => {
+    const error = {
+      stderr:
+        'To github.com:org/repo.git\n ! [remote rejected] harness/issue-55-fix -> ' +
+        'harness/issue-55-fix (refusing to allow an OAuth App to create or update workflow ' +
+        '`.github/workflows/ci.yml` without `workflow` scope)\n' +
+        "error: failed to push some refs to 'github.com:org/repo.git'\n",
+    };
+    expect(isMissingWorkflowScopeError(error)).toBe(true);
+  });
+
+  it('returns false for an unrelated push failure', () => {
+    const error = { stderr: '! [remote rejected] main -> main (pre-receive hook declined)\n' };
+    expect(isMissingWorkflowScopeError(error)).toBe(false);
+  });
+
+  it('returns false for a non-error-shaped value', () => {
+    expect(isMissingWorkflowScopeError(null)).toBe(false);
+    expect(isMissingWorkflowScopeError(new Error('generic failure'))).toBe(false);
   });
 });
 

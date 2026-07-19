@@ -68,3 +68,14 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   substitution au premier `}` non échappé rencontré, tronquant silencieusement du JSON contenant
   des objets. Assigner le défaut à une variable intermédiaire d'abord (`default=...; echo
 "${VAR:-$default}"`) plutôt que de l'inliner.
+
+- 2026-07-19 (issue #55) : nuance à la règle #54/#57 ci-dessus ("tout chemin d'échec passe par
+  `retryFreshSprintOrGiveUp`") — elle vaut pour les échecs _potentiellement transitoires_. Un push
+  rejeté pour scope OAuth `workflow` manquant sur `GH_TOKEN` échoue identiquement à chaque essai
+  (déterministe, pas transitoire) : retenter ne fait que gaspiller `maxRetryCount` sprints avant
+  d'atterrir au même endroit. `isMissingWorkflowScopeError`/`escalateMissingWorkflowScope`
+  (`src/github.ts`/`src/loop.ts`) détectent ce cas précis (regex sur le message d'erreur GitHub) et
+  escaladent en `needs-human` dès le premier échec, en court-circuitant le retry borné. Pattern
+  réutilisable : un échec de push confirmé déterministe (message d'erreur reconnaissable) mérite sa
+  propre détection plutôt que de payer le coût plein d'un cycle de retries connu d'avance pour
+  échouer.
