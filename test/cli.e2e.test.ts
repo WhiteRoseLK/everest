@@ -14,6 +14,7 @@ import { main, runWatch, runChat, runCatchup, runDoctor } from '../src/cli.js';
 
 const CHAT_MARKER = '/tmp/fake-chat-invoked.marker';
 const DOCKER_COMPOSE_UP_MARKER = '/tmp/fake-docker-compose-up.marker';
+const DOCKER_COMPOSE_EXEC_MARKER = '/tmp/fake-docker-compose-exec.marker';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
@@ -50,6 +51,7 @@ describe('everest CLI end-to-end', () => {
     delete process.env.EVEREST_IN_CONTAINER;
     rmSync(CHAT_MARKER, { force: true });
     rmSync(DOCKER_COMPOSE_UP_MARKER, { force: true });
+    rmSync(DOCKER_COMPOSE_EXEC_MARKER, { force: true });
     logSpy.mockRestore();
     errorSpy.mockRestore();
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -169,6 +171,12 @@ describe('everest CLI end-to-end', () => {
     expect(args).toContain('--agent chat');
     expect(args).toContain('--permission-mode bypassPermissions');
     expect(args).toContain('fake/repo');
+    // The exec runs as `-u node`: the container now starts as root (entrypoint realigns /app
+    // ownership before dropping to node - issue #84), so exec without `-u` would be root, which
+    // Claude Code's bypassPermissions refuses.
+    expect(existsSync(DOCKER_COMPOSE_EXEC_MARKER)).toBe(true);
+    const execArgs = readFileSync(DOCKER_COMPOSE_EXEC_MARKER, 'utf-8');
+    expect(execArgs).toMatch(/exec .*-u node .*harness claude/);
   });
 
   it('chat propagates the exit code of the underlying claude process', () => {

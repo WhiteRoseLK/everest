@@ -32,9 +32,9 @@ pour arrêter.
 
 `setup.sh` ajoute aussi automatiquement un alias `everest` à ton shell (`.bashrc`/`.zshrc` selon
 `$SHELL`, idempotent — pas de doublon si tu relances le script), qui exécute la CLI _dans_ le
-conteneur (`docker compose exec harness node bin/everest.js ...`) puisque l'hôte n'a que Docker,
-pas Node. Une fois le shell rechargé (`source ~/.bashrc`/`~/.zshrc`, ou un nouveau terminal), il
-suffit de lancer `everest` pour interagir avec lui — voir la section CLI ci-dessous.
+conteneur (`docker compose exec -u node harness node bin/everest.js ...`) puisque l'hôte n'a que
+Docker, pas Node. Une fois le shell rechargé (`source ~/.bashrc`/`~/.zshrc`, ou un nouveau
+terminal), il suffit de lancer `everest` pour interagir avec lui — voir la section CLI ci-dessous.
 
 ### Dev local sans Docker
 

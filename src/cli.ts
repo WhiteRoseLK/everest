@@ -313,10 +313,17 @@ function ensureHarnessContainer(cwd: string): void {
  *
  * When `EVEREST_IN_CONTAINER` is set (see `Dockerfile`), this process is already running inside
  * the harness container itself - the case where the operator's shell `everest` alias runs
- * `docker compose exec harness node bin/everest.js "$@"` for every subcommand, chat included
- * (see `setup.sh`). Nesting another `docker compose exec` from in there would need a Docker
- * client and socket that the image deliberately doesn't have, so this instead skips straight to
- * spawning `claude` in the current process rather than wrapping it in a second container hop.
+ * `docker compose exec -u node harness node bin/everest.js "$@"` for every subcommand, chat
+ * included (see `setup.sh`). Nesting another `docker compose exec` from in there would need a
+ * Docker client and socket that the image deliberately doesn't have, so this instead skips
+ * straight to spawning `claude` in the current process rather than wrapping it in a second
+ * container hop.
+ *
+ * The `docker compose exec` runs as `-u node` explicitly: the container now starts as root (its
+ * entrypoint realigns the bind-mounted repo's ownership onto node before dropping to node - see
+ * docker-entrypoint.sh / issue #84), so `exec` without `-u` would land as root, and Claude Code's
+ * bypassPermissions refuses to run as root. `-u node` keeps the chat session non-root like the
+ * harness's own process.
  */
 export function runChat(repo: string, cwd: string = REPO_ROOT): number {
   const systemPromptAppend =
@@ -348,7 +355,7 @@ export function runChat(repo: string, cwd: string = REPO_ROOT): number {
 
   const result = spawnSync(
     'docker',
-    ['compose', 'exec', '-it', 'harness', 'claude', ...claudeArgs],
+    ['compose', 'exec', '-it', '-u', 'node', 'harness', 'claude', ...claudeArgs],
     {
       cwd,
       stdio: 'inherit',
