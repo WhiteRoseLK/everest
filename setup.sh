@@ -60,21 +60,33 @@ shell_rc_file() {
   esac
 }
 
-# Ajoute un alias `everest` qui exécute la CLI *dans* le conteneur (`docker compose exec`)
-# plutôt que sur l'hôte : l'hôte n'a que Docker (voir Prérequis), pas Node, donc `node
-# bin/everest.js` ne peut tourner que côté conteneur, qui l'embarque déjà (voir Dockerfile).
+# Ajoute (ou met à jour) un alias `everest` qui exécute la CLI *dans* le conteneur (`docker
+# compose exec`) plutôt que sur l'hôte : l'hôte n'a que Docker (voir Prérequis), pas Node, donc
+# `node bin/everest.js` ne peut tourner que côté conteneur, qui l'embarque déjà (voir Dockerfile).
 # `-u node` est indispensable : le conteneur démarre en root (son entrypoint réaligne l'ownership
 # du repo bind-monté sur node avant de dropper vers node - voir docker-entrypoint.sh / issue #84),
 # donc un `exec` sans `-u` tournerait en root, ce que `bypassPermissions` de Claude Code refuse.
-# Idempotent : ne réécrit rien si l'alias est déjà présent.
+#
+# Idempotent, mais pas seulement "skip si présent" : si une ligne `alias everest=` existe déjà
+# mais diffère de la définition courante (ex: ancien alias sans `-u node`, laissé périmé après le
+# fix #84), elle est remplacée plutôt que conservée telle quelle (issue #95) - sinon une
+# installation existante garde silencieusement un alias cassé après un `git pull` + re-run de ce
+# script.
 ensure_alias() {
   local rc_file
   rc_file="$(shell_rc_file)"
   local alias_line="alias everest='docker compose --project-directory \"$REPO_DIR\" exec -u node harness node bin/everest.js'"
 
   if [ -f "$rc_file" ] && grep -qF "alias everest=" "$rc_file"; then
-    log "Alias 'everest' déjà présent dans $rc_file."
-    return
+    if grep -qF "$alias_line" "$rc_file"; then
+      log "Alias 'everest' déjà à jour dans $rc_file."
+      return
+    fi
+    log "Alias 'everest' obsolète détecté dans $rc_file, mise à jour..."
+    local tmp_file
+    tmp_file="$(mktemp)"
+    grep -vF "alias everest=" "$rc_file" >"$tmp_file"
+    mv "$tmp_file" "$rc_file"
   fi
 
   {
@@ -96,4 +108,9 @@ main() {
   echo "Pour interagir avec Everest, lance simplement : everest"
 }
 
-main "$@"
+# Ne lance `main` que si le script est exécuté directement, pas quand il est `source`-é (voir
+# test/setup-script.test.ts, qui source ce fichier pour tester `ensure_alias` en isolation sans
+# avoir à mocker Docker/docker-compose).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
