@@ -156,6 +156,22 @@ describe('commitWorkInProgress', () => {
     expect(tracked).not.toContain('.harness');
     expect(tracked).toContain('file.txt');
   });
+
+  it("still commits when the repo's pre-commit hook (lint/test) would fail (issue #85)", async () => {
+    // The repo's real Husky pre-commit hook (added in issue #85) runs lint/test on every commit.
+    // A WIP checkpoint is explicitly incomplete/unvetted by design and must survive even when
+    // lint/test are currently failing - commitWorkInProgress must pass --no-verify to skip it,
+    // mirroring pushBranch's noVerify for pre-push.
+    const hooksDir = join(repoDir, 'fake-hooks');
+    mkdirSync(hooksDir);
+    writeFileSync(join(hooksDir, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    git(['config', 'core.hooksPath', 'fake-hooks'], repoDir);
+    writeFileSync(join(repoDir, 'file.txt'), 'wip content');
+
+    const committed = await commitWorkInProgress(repoDir, 'WIP checkpoint');
+
+    expect(committed).toBe(true);
+  });
 });
 
 describe('isMissingWorkflowScopeError', () => {
