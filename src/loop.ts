@@ -102,6 +102,28 @@ function missingWorkflowScopeMessage(): string {
 }
 
 /**
+ * Appends a concrete diagnostic block (reason/branch/attempts) below the fixed lead sentence,
+ * building the full comment posted whenever the harness gives up on an issue and marks it
+ * needs-human. Before this, every give-up comment was just that lead sentence, identical on
+ * every occurrence - on issue #47 that produced 8 near-identical comments, none of which said
+ * what was actually blocking progress (e.g. a failing `npm run typecheck`), so resuming the
+ * issue meant replaying the whole history (issue body + logs) instead of reading a summary. The
+ * lead sentence is kept as-is (rather than folded into the block) so existing substring checks
+ * like "limite de N tentatives" keep matching.
+ */
+function withDiagnosticDetails(
+  lead: string,
+  details: { reason: string; branch: string; attempts: string },
+): string {
+  return (
+    `${lead}\n\n` +
+    `- **Raison** : ${details.reason}\n` +
+    `- **Branche** : \`${details.branch}\`\n` +
+    `- **Tentatives** : ${details.attempts}`
+  );
+}
+
+/**
  * Escalates straight to needs-human when a push failed specifically due to a missing `workflow`
  * OAuth scope, instead of routing through {@link retryFreshSprintOrGiveUp}'s bounded-retry
  * mechanism: unlike a transient failure, this rejection is deterministic - it fails identically
@@ -220,7 +242,14 @@ async function runReviewLoop(
       console.error(`Failed to push fixup for issue #${issue.number}:`, error);
       const message = isMissingWorkflowScopeError(error)
         ? missingWorkflowScopeMessage()
-        : `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`;
+        : withDiagnosticDetails(
+            `Le harnais n'a pas pu pousser les corrections de review (échec de push répété) — intervention humaine nécessaire.`,
+            {
+              reason: error instanceof Error ? error.message : String(error),
+              branch,
+              attempts: `${config.pushRetryCount} tentative(s) de push`,
+            },
+          );
       await commentOnIssue(config.githubRepo, issue, message);
       await markPullRequestNeedsHuman(config.githubRepo, branch);
       await markIssueNeedsHuman(config.githubRepo, issue);
@@ -231,7 +260,15 @@ async function runReviewLoop(
   await commentOnIssue(
     config.githubRepo,
     issue,
-    `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
+    withDiagnosticDetails(
+      `Le harnais a atteint la limite de ${config.maxReviewCycles} cycles de review sans approbation — intervention humaine nécessaire.`,
+      {
+        reason:
+          'le code-reviewer a demandé des corrections (label needs-fixup) à chaque cycle sans jamais approuver ni merger la PR',
+        branch,
+        attempts: `${config.maxReviewCycles} cycles de review (limite atteinte)`,
+      },
+    ),
   );
   await markPullRequestNeedsHuman(config.githubRepo, branch);
   await markIssueNeedsHuman(config.githubRepo, issue);
@@ -261,7 +298,14 @@ async function retryFreshSprintOrGiveUp(
     await commentOnIssue(
       config.githubRepo,
       issue,
-      `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+      withDiagnosticDetails(
+        `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives sans produire de travail exploitable — intervention humaine nécessaire.`,
+        {
+          reason,
+          branch,
+          attempts: `${nextRetryCount} sprints (limite : ${config.maxRetryCount})`,
+        },
+      ),
     );
     await markIssueNeedsHuman(config.githubRepo, issue);
     clearState(cwd);
@@ -366,7 +410,14 @@ async function handleIssue(
       await commentOnIssue(
         config.githubRepo,
         issue,
-        `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
+        withDiagnosticDetails(
+          `Le harnais a atteint la limite de ${config.maxRetryCount} tentatives après rate-limit sans succès — intervention humaine nécessaire.`,
+          {
+            reason: "rate-limité par l'API Claude à chaque tentative",
+            branch,
+            attempts: `${retryCount} tentatives (limite : ${config.maxRetryCount})`,
+          },
+        ),
       );
       await markIssueNeedsHuman(config.githubRepo, issue);
       clearState(cwd);
