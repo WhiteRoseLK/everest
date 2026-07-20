@@ -9,8 +9,11 @@ services:
     ports:
       # Publishes the read-only status dashboard (src/dashboard.ts, issue #65), started
       # automatically alongside the loop by src/index.ts, so it's reachable from the host at
-      # http://localhost:3000 without needing a shell in the container.
-      - '${DASHBOARD_PORT:-3000}:${DASHBOARD_PORT:-3000}'
+      # http://localhost:3000 without needing a shell in the container. Bound to 127.0.0.1 by
+      # default rather than all interfaces: the dashboard is unauthenticated, and while its data
+      # isn't secret (the repo is already public), there's no reason to expose it beyond the host
+      # it runs on. Still overridable (e.g. DASHBOARD_BIND=0.0.0.0) if intentionally needed.
+      - '${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-3000}:${DASHBOARD_PORT:-3000}'
     volumes:
       - .:/app
       - /app/node_modules

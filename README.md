@@ -120,10 +120,13 @@ Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans
 
 En complément de la CLI, `npm start` (`src/index.ts`) démarre automatiquement un petit serveur
 HTTP (`src/dashboard.ts`, sans dépendance ajoutée — juste `node:http`) sur le port `DASHBOARD_PORT`
-(défaut `3000`, voir `.env.example`), publié par `docker-compose.yml` — accessible depuis l'hôte
-sur `http://localhost:3000` une fois le conteneur `harness` démarré. Il tourne en parallèle de la
-boucle principale, pas à sa place : une erreur au démarrage du serveur est capturée et journalisée
-sans empêcher la boucle de tourner (le dashboard est strictement additif).
+(défaut `3000`, voir `.env.example`), publié par `docker-compose.yml` sur `127.0.0.1` uniquement
+par défaut (pas toutes les interfaces — le dashboard n'est pas authentifié ; overridable via
+`DASHBOARD_BIND`) — accessible depuis l'hôte sur `http://localhost:3000` une fois le conteneur
+`harness` démarré. Il tourne en parallèle de la boucle principale, pas à sa place : une erreur
+synchrone au démarrage du serveur est capturée et journalisée sans empêcher la boucle de tourner,
+et un échec de bind asynchrone (`EADDRINUSE`, etc.) est intercepté via un listener `'error'` sur le
+`Server` plutôt que de remonter en exception non gérée (le dashboard est strictement additif).
 
 La page regroupe, à l'aide d'un poll JS (`fetch('/api/status')` toutes les 5s, pas de WebSocket) :
 le sprint en cours (issue/branche/depuis quand/tentative, lu directement dans

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { buildDashboardData, startDashboardServer } from '../src/dashboard.js';
 
@@ -122,6 +123,32 @@ describe('dashboard (issue #65)', () => {
       ]);
     } finally {
       server.close();
+    }
+  });
+
+  it('a bind failure (e.g. port already in use) is logged and swallowed, not an uncaught exception', async () => {
+    // server.listen(port) fails asynchronously (an 'error' event, not a thrown exception) -
+    // without an 'error' listener registered, Node's default behavior rethrows it as an
+    // uncaught exception, which would crash the whole process (see PR review on issue #65).
+    const blocker: Server = createServer();
+    await new Promise<void>((resolve) => blocker.listen(0, resolve));
+    const port = (blocker.address() as AddressInfo).port;
+
+    const uncaughtExceptions: unknown[] = [];
+    const onUncaughtException = (error: unknown): void => {
+      uncaughtExceptions.push(error);
+    };
+    process.on('uncaughtException', onUncaughtException);
+
+    try {
+      const dashboardServer = startDashboardServer('fake/repo', tmpRoot, port);
+      // Give the async 'error' event a chance to fire before asserting nothing escaped.
+      await new Promise<void>((resolve) => dashboardServer.once('error', () => resolve()));
+      expect(uncaughtExceptions).toEqual([]);
+      dashboardServer.close();
+    } finally {
+      process.removeListener('uncaughtException', onUncaughtException);
+      blocker.close();
     }
   });
 

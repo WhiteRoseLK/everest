@@ -246,6 +246,13 @@ export async function handleDashboardRequest(
  * Deliberately built on Node's built-in `http` module rather than adding a web framework
  * dependency - the surface is two routes (`GET /api/status`, `GET /` for everything else), well
  * within what `createServer` handles directly.
+ *
+ * `server.listen(port)` binds asynchronously: a failure (e.g. `EADDRINUSE`) surfaces as an
+ * `'error'` event, not a thrown exception. Without a listener registered for it, Node's default
+ * behavior is to rethrow it as an uncaught exception, which would crash the whole harness process
+ * moments after this function already returned successfully - defeating the caller's `try/catch`
+ * in `src/index.ts` and contradicting the "additive, never takes the loop down" guarantee
+ * documented there and in the README. Registering a handler here logs and swallows it instead.
  */
 export function startDashboardServer(repo: string, cwd: string, port: number): Server {
   const server = createServer((req, res) => {
@@ -254,6 +261,9 @@ export function startDashboardServer(repo: string, cwd: string, port: number): S
       if (!res.headersSent) res.writeHead(500);
       res.end();
     });
+  });
+  server.on('error', (error) => {
+    console.error('Dashboard server failed to start (loop continues without it):', error);
   });
   server.listen(port);
   return server;
