@@ -172,7 +172,18 @@ async function runReviewLoop(
   for (let cycle = 0; cycle < config.maxReviewCycles; cycle += 1) {
     const review = await runCodeReview(branch, cwd, config.maxBudgetUsdPerReview);
     if (!review.success) {
+      // A failed/budget-exhausted review invocation used to be a dead end: logged to the
+      // container's stdout (invisible outside `docker logs`) and nothing else, leaving the PR
+      // stuck forever with zero trace on GitHub - see issue #78 (observed in practice on PRs #70
+      // and #49). Escalate the same way every other give-up path in this file does.
       console.log(`Code review failed for issue #${issue.number}: ${review.errorSummary}`);
+      await commentOnIssue(
+        config.githubRepo,
+        issue,
+        `Le cycle de review a échoué (${review.errorSummary}) — intervention humaine nécessaire.`,
+      );
+      await markPullRequestNeedsHuman(config.githubRepo, branch);
+      await markIssueNeedsHuman(config.githubRepo, issue);
       return;
     }
 
@@ -184,9 +195,22 @@ async function runReviewLoop(
 
     const labels = await getPullRequestLabels(config.githubRepo, branch);
     if (!labels.includes(NEEDS_FIXUP_LABEL)) {
+      // code-reviewer is supposed to always either merge the PR or leave it labeled
+      // NEEDS_FIXUP_LABEL with an explanatory comment (CLAUDE.md, Code Review). Landing here means
+      // it did neither - e.g. it forgot the `gh pr edit --add-label` call after commenting (PR
+      // #25), or it never got that far at all. Without an explicit escalation this used to be a
+      // silent console.log, leaving the PR stuck indefinitely with no trace on GitHub for a human
+      // to notice (issue #78) - treat it as the anomaly it is instead.
       console.log(
-        `PR for issue #${issue.number} not merged yet (state: ${prState}, no fixup requested)`,
+        `PR for issue #${issue.number} not merged and not labeled '${NEEDS_FIXUP_LABEL}' (state: ${prState}) - treating as a stalled review and escalating`,
       );
+      await commentOnIssue(
+        config.githubRepo,
+        issue,
+        `Le code-reviewer a terminé son passage sans merger la PR ni poser le label \`${NEEDS_FIXUP_LABEL}\` (état de la PR : ${prState}) — cas anormal, intervention humaine nécessaire.`,
+      );
+      await markPullRequestNeedsHuman(config.githubRepo, branch);
+      await markIssueNeedsHuman(config.githubRepo, issue);
       return;
     }
 
