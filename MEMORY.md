@@ -25,10 +25,6 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
 
 ## Entrées
 
-- 2026-07-17 (issue #24) : `eslint.config.js` n'active les globals Node que pour `**/*.ts` — un
-  `.js` ajouté ailleurs (ex: `bin/everest.js`) se fait flaguer `'process' is not defined`. Rester
-  en `.ts`, ou ajouter un bloc `languageOptions.globals` dédié.
-
 - 2026-07-18 (issue #37) : pas de moyen fiable de savoir, via `gh`, _qui_ a ouvert une issue —
   `issue-worker` et `everest ask` créent tous deux des issues sous le même compte `GH_TOKEN`.
   Pattern réutilisable pour tout futur "depuis la dernière fois" : `.harness/<nom>.json`
@@ -65,7 +61,13 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   précédent a réussi mais son push a échoué), on retente juste le push plutôt que de relancer
   l'agent, qui ne trouverait rien à faire et rapporterait à tort "no new commit produced" (#61).
   Le push d'un fixup de review (PR déjà ouverte) suit la même logique (2) mais escalade directement
-  (pas de nouveau sprint) une fois `pushBranchWithRetries` épuisé.
+  (pas de nouveau sprint) une fois `pushBranchWithRetries` épuisé. Nuance supplémentaire (#83) : un
+  fixup qui échoue sans produire de commit faisait `return` directement dans `runReviewLoop`, sans
+  jamais consommer le budget `maxReviewCycles` ni escalader — `resumePendingReview` re-relançait
+  `code-reviewer` depuis `cycle=0` à chaque poll, indéfiniment. Corrigé en laissant l'échec continuer
+  la boucle `for cycle` existante (`continue` au lieu de `return`) : le budget se consomme _au sein
+  d'un seul appel_ à `runReviewLoop`, sans compteur persisté séparé — plus simple que d'ajouter un
+  champ à `state.json` pour un cas qui n'a pas besoin de survivre à un redémarrage de process.
 
 - 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
   par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la
