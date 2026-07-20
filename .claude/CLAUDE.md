@@ -87,8 +87,8 @@ Note : la branch protection classique et les rulesets GitHub ne sont pas disponi
 
 ## Security Standards
 
-- Un hook `PreToolUse` bloque (`exit 2`) tout `git commit` si `npm run lint` ou `npm test` échoue — ne pas contourner en committant via un autre outil.
-- Un hook `PreToolUse` bloque toute commande Bash contenant un pattern de secret probable (clé API, token, mot de passe).
+- Un hook `PreToolUse` (`enforce-quality-before-commit.sh`) bloque (`exit 2`) tout appel Bash contenant `git commit` (détecté en début de commande ou après un opérateur shell `;`/`&&`/`||`/`|`, y compris via `cd sub && git commit`, `env X=Y git commit` ou `git -C . commit` — pas seulement un préfixe littéral, durci en issue #85) si `npm run lint` ou `npm test` échoue. Le vrai gate non contournable par un habillage de la commande reste le hook Husky **`pre-commit`** (`.husky/pre-commit`, ajouté en issue #85) : il tourne au niveau git lui-même quelle que soit la façon dont `git commit` a été invoqué, donc `enforce-quality-before-commit.sh` n'est là que pour donner un retour rapide à l'agent avant que git n'essaie réellement de committer. `commitWorkInProgress()` (voir Budget Policy) committe avec `--no-verify` pour rester exempté de ce hook, comme `pushBranch` l'est déjà de `pre-push`.
+- Un hook `PreToolUse` (`block-secrets.sh`) bloque toute commande Bash, tout contenu `Write`, ou tout `new_string` d'un `Edit` contenant un pattern de secret probable (clé API, token, mot de passe) — couvre aussi bien un secret collé dans une commande qu'un secret écrit directement dans un fichier via Write/Edit (durci en issue #85, ne couvrait auparavant que Bash).
 - Ne jamais committer `.env` ou toute valeur de `CLAUDE_CODE_OAUTH_TOKEN` / `GH_TOKEN`.
 
 ## Memory

@@ -55,3 +55,10 @@ décision d'architecture durable migre vers `.claude/CLAUDE.md`, pas ici.
   merge postérieur à sa création (`createdAt` vs. date de clôture de l'issue liée en "noticed while
   working on #x"). Si le code couvre déjà le comportement désiré (tests e2e inclus), fermer comme
   doublon avec un commentaire vers le commit/PR concerné plutôt que committer du redondant.
+
+- 2026-07-20 (issue #85) : `block-secrets.sh` scanne désormais aussi les outils `Write`/`Edit`, pas
+  seulement `Bash`. Conséquence directe : écrire un fichier (via Write) dont le contenu littéral
+  ressemble à un vrai secret (fixture de test avec un faux token d'API/AWS) se fait bloquer par ce
+  hook au moment même de l'écriture. Construire ces valeurs de test par concaténation de
+  sous-chaînes dans le code source plutôt que comme littéral complet, pour que le texte réellement
+  écrit sur disque ne matche pas le pattern.
