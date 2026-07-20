@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 /**
  * Regression test for issue #71: a fresh VPS deploy following the README's old
@@ -61,7 +63,53 @@ describe('setup.sh', () => {
     expect(script).toMatch(/docker compose .*exec -u node harness node bin\/everest\.js/);
   });
 
-  it('is idempotent about the alias: skips re-adding it if already present', () => {
+  it('is idempotent about the alias: skips re-adding it if already up to date', () => {
     expect(script).toMatch(/grep -qF "alias everest=" "\$rc_file"/);
+    expect(script).toMatch(/déjà à jour/);
+  });
+
+  /**
+   * Regression test for issue #95: after #84 changed the alias definition (added `-u node`),
+   * hosts that had already run setup.sh kept the stale alias forever, since `ensure_alias` used
+   * to only check whether *an* `alias everest=` line existed, not whether it matched the current
+   * definition. Runs `ensure_alias` for real (the script is made sourceable via the
+   * `BASH_SOURCE`/`$0` guard at the bottom) against a temp rc file seeded with an old-style alias.
+   */
+  describe('ensure_alias (executed)', () => {
+    function runEnsureAlias(rcFileContent: string): string {
+      const dir = mkdtempSync(join(tmpdir(), 'setup-alias-test-'));
+      const rcFile = join(dir, 'rcfile');
+      writeFileSync(rcFile, rcFileContent);
+      execFileSync(
+        'bash',
+        ['-c', `source "${scriptPath}"; shell_rc_file() { echo "${rcFile}"; }; ensure_alias`],
+        { encoding: 'utf-8' },
+      );
+      return readFileSync(rcFile, 'utf-8');
+    }
+
+    it('replaces a stale alias (missing -u node) with the current definition', () => {
+      const before = [
+        '# some existing rc content',
+        `alias everest='docker compose --project-directory "/old/path" exec harness node bin/everest.js'`,
+        '',
+      ].join('\n');
+
+      const after = runEnsureAlias(before);
+
+      expect(after).not.toMatch(/exec harness node bin\/everest\.js/);
+      expect(after).toMatch(/exec -u node harness node bin\/everest\.js/);
+      // The unrelated pre-existing content is preserved, not wiped out.
+      expect(after).toMatch(/# some existing rc content/);
+      // Only one alias line remains, not both old and new stacked.
+      expect(after.match(/alias everest=/g)?.length).toBe(1);
+    });
+
+    it('leaves an already up-to-date alias untouched', () => {
+      const before = runEnsureAlias('');
+      const after = runEnsureAlias(before);
+
+      expect(after).toBe(before);
+    });
   });
 });
