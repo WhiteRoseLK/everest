@@ -45,32 +45,26 @@ durable doit migrer vers `.claude/CLAUDE.md` plutôt que de rester ici indéfini
   shell-out `claude -p`) ; les appelants qui ont un vrai LLM dans la boucle (agent `chat`) passent
   `--title` pour la court-circuiter plutôt que de forcer tout le monde à payer un appel LLM.
 
-- 2026-07-18/19 (issues #54, #57, #55, #59, #61) : dans `handleIssue`/`runReviewLoop`
-  (`src/loop.ts`), **tout** chemin d'échec de sprint doit passer par `retryFreshSprintOrGiveUp`
-  (jamais `commentOnIssue` + `clearState` directement) — sinon `retryCount` repart à 0 et le
-  harnais boucle indéfiniment sans jamais atteindre `maxRetryCount` ni poser `needs-human` (#54 :
-  `pushBranch` non protégé par `try/catch` ; #57 : "no new commit produced" traité hors du
-  mécanisme borné). Plusieurs nuances court-circuitent ce retry borné plutôt que de le consommer :
-  (1) un push rejeté pour scope OAuth `workflow` manquant échoue identiquement à chaque essai —
-  `isMissingWorkflowScopeError` (`src/github.ts`) le détecte et escalade en `needs-human` dès le
-  premier échec (#55) ; (2) un échec de push potentiellement transitoire est d'abord retenté
-  directement, sans nouveau sprint (`pushBranchWithRetries`, `config.pushRetryCount`/
-  `pushRetryDelayMs`, #59) ; (3) quand `pushBranchWithRetries` finit par s'épuiser malgré tout et
-  qu'un nouveau sprint est lancé, `handleIssue` vérifie d'abord `hasUnpushedCommit` (`src/github.ts`)
-  avant de rappeler `issue-worker` — s'il y a déjà un commit local en avance sur `origin` (un sprint
-  précédent a réussi mais son push a échoué), on retente juste le push plutôt que de relancer
-  l'agent, qui ne trouverait rien à faire et rapporterait à tort "no new commit produced" (#61).
-  Le push d'un fixup de review (PR déjà ouverte) suit la même logique (2) mais escalade directement
-  (pas de nouveau sprint) une fois `pushBranchWithRetries` épuisé. Nuance supplémentaire (#83) : un
-  fixup qui échoue sans produire de commit faisait `return` directement dans `runReviewLoop`, sans
-  jamais consommer le budget `maxReviewCycles` ni escalader — `resumePendingReview` re-relançait
-  `code-reviewer` depuis `cycle=0` à chaque poll, indéfiniment. Corrigé en laissant l'échec continuer
-  la boucle `for cycle` existante (`continue` au lieu de `return`) : le budget se consomme _au sein
-  d'un seul appel_ à `runReviewLoop`, sans compteur persisté séparé — plus simple que d'ajouter un
-  champ à `state.json` pour un cas qui n'a pas besoin de survivre à un redémarrage de process.
+- 2026-07-18/19 (issues #54, #57, #55, #59, #61, #83) : dans `handleIssue`/`runReviewLoop`
+  (`src/loop.ts`), **tout** chemin d'échec de sprint/fixup doit passer par le mécanisme de retry
+  borné (`retryFreshSprintOrGiveUp`, ou le budget `maxReviewCycles` de `runReviewLoop` via
+  `continue` plutôt que `return` sur un échec sans commit) — jamais un `commentOnIssue` +
+  `clearState`/`return` direct, sinon le compteur ne progresse jamais et le harnais boucle sans fin
+  ni escalade `needs-human`. Nuances qui court-circuitent ce retry plutôt que de le consommer : scope
+  OAuth `workflow` manquant → escalade immédiate (`isMissingWorkflowScopeError`, échoue
+  identiquement à chaque essai) ; push transitoire → retenté directement sans nouveau sprint
+  (`pushBranchWithRetries`) ; commit local déjà en avance sur `origin` → on retente juste le push
+  (`hasUnpushedCommit`) plutôt que de relancer l'agent pour rien.
 
 - 2026-07-19 (issue #60) : dans `test/fixtures/fake-bin/gh` (bash), ne jamais mettre une valeur
   par défaut contenant des `}` littéraux directement dans `${VAR:-...}` — bash termine la
   substitution au premier `}` non échappé rencontré, tronquant silencieusement du JSON contenant
   des objets. Assigner le défaut à une variable intermédiaire d'abord (`default=...; echo
 "${VAR:-$default}"`) plutôt que de l'inliner.
+
+- 2026-07-20 (issue #94) : pour toute condition "permanente et détectable au boot" (comme l'EACCES
+  du bind mount, #84), préférer un **preflight avant la boucle** (fail-fast, exit non-zéro, message
+  explicite) plutôt que de laisser le per-iteration try/catch de `runLoop` la ré-échouer en boucle
+  silencieuse chaque `pollIntervalMs`. `checkGitWritable`/`checkHarnessWritable`
+  (`src/diagnostics.ts`) + `runStartupWritabilityPreflight` (`src/loop.ts`) en sont le modèle
+  réutilisable.

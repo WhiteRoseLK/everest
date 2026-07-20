@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -1008,6 +1016,90 @@ describe('runLoop end-to-end', () => {
       } finally {
         consoleErrorSpy.mockRestore();
         delete process.env.FAKE_GIT_FETCH_MAIN_FAIL_ONCE;
+      }
+    },
+  );
+
+  // chmod-based permission tests are meaningless as root (root bypasses file permissions).
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it.skipIf(isRoot)(
+    'fails fast with an explicit message instead of looping silently when .git is not writable (issue #94)',
+    async () => {
+      // Simulates the bind-mount ownership EACCES of issue #84: every iteration's very first move
+      // is a git operation, so without a startup preflight this would fail identically forever,
+      // one silent line in .harness/errors.jsonl per poll, instead of failing loudly once at boot.
+      chmodSync(join(workDir, '.git'), 0o500); // read+execute, no write
+      const exitProcess = vi.fn();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const config: Config = {
+        githubRepo: 'fake/repo',
+        maxBudgetUsdPerIssue: 1,
+        maxBudgetUsdPerReview: 1,
+        maxReviewCycles: 3,
+        watchPollIntervalMs: 30_000,
+        pollIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetryDelayMs: 1,
+        maxRetryCount: 10,
+        pushRetryCount: 1,
+        pushRetryDelayMs: 1,
+        dashboardPort: 0,
+      };
+
+      try {
+        // exitProcess is a mock here, so it doesn't actually terminate runLoop - the assertion
+        // that matters is that no issue processing happened (no PR marker), proving the preflight
+        // returned early instead of falling through into the poll loop.
+        await runLoop(config, workDir, 3, exitProcess);
+
+        expect(exitProcess).toHaveBeenCalledWith(1);
+        expect(existsSync(prMarker)).toBe(false);
+        const output = errorSpy.mock.calls.flat().map(String).join('\n');
+        expect(output).toContain('not writable');
+        expect(output).toContain('issue #84');
+      } finally {
+        chmodSync(join(workDir, '.git'), 0o755); // restore so afterEach can clean up
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.skipIf(isRoot)(
+    'fails fast with an explicit message instead of looping silently when .harness/ is not writable (issue #94)',
+    async () => {
+      mkdirSync(join(workDir, '.harness'), { recursive: true });
+      chmodSync(join(workDir, '.harness'), 0o500); // read+execute, no write
+      const exitProcess = vi.fn();
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const config: Config = {
+        githubRepo: 'fake/repo',
+        maxBudgetUsdPerIssue: 1,
+        maxBudgetUsdPerReview: 1,
+        maxReviewCycles: 3,
+        watchPollIntervalMs: 30_000,
+        pollIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetryDelayMs: 1,
+        maxRetryCount: 10,
+        pushRetryCount: 1,
+        pushRetryDelayMs: 1,
+        dashboardPort: 0,
+      };
+
+      try {
+        await runLoop(config, workDir, 3, exitProcess);
+
+        expect(exitProcess).toHaveBeenCalledWith(1);
+        expect(existsSync(prMarker)).toBe(false);
+        const output = errorSpy.mock.calls.flat().map(String).join('\n');
+        expect(output).toContain('not writable');
+        expect(output).toContain('issue #84');
+      } finally {
+        chmodSync(join(workDir, '.harness'), 0o755); // restore so afterEach can clean up
+        errorSpy.mockRestore();
       }
     },
   );
