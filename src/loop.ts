@@ -224,8 +224,29 @@ async function runReviewLoop(
       `issue-#${issue.number}-fixup`,
     );
     if (!fixup.success) {
-      console.log(`Fixup attempt failed for issue #${issue.number}: ${fixup.errorSummary}`);
-      return;
+      // Used to `return` unconditionally here, which left the PR open and still labeled
+      // NEEDS_FIXUP_LABEL with nothing tracking how many times this had already happened: the
+      // next poll's resumePendingReview found the same PR, re-invoked code-reviewer (a paid call)
+      // from a fresh `cycle = 0`, hit the same fixup failure, and returned again - looping forever
+      // without ever reaching the escalation below or consuming `maxReviewCycles` (issue #83, same
+      // class of bug as #54/#57/#60). Falling through instead of returning lets *this* cycle count
+      // against the for-loop's own bound, so the run naturally reaches the post-loop escalation
+      // once `maxReviewCycles` is exhausted - no separate persisted counter needed, since the
+      // bound is consumed within this single invocation rather than reset by each external re-poll.
+      console.log(
+        `Fixup attempt ${cycle + 1}/${config.maxReviewCycles} failed for issue #${issue.number}: ${fixup.errorSummary}`,
+      );
+      if (fixup.rateLimited) {
+        // Rate limits recover over time, unlike a deterministic "no new commit produced" - give it
+        // a growing backoff before spending the next cycle's review+fixup pair, same policy as the
+        // pre-review sprint retries in handleIssue.
+        const delay = Math.min(config.baseRetryDelayMs * 2 ** cycle, config.maxRetryDelayMs);
+        console.log(
+          `Fixup rate-limited for issue #${issue.number}, waiting ${delay}ms before retrying`,
+        );
+        await sleep(delay);
+      }
+      continue;
     }
 
     try {

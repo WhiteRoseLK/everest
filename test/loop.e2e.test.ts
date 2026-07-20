@@ -762,6 +762,93 @@ describe('runLoop end-to-end', () => {
     expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
   });
 
+  it('escalates to needs-human when a review fixup repeatedly produces no commit (issue #83)', async () => {
+    // Simulate a previous run that already opened the PR for issue #1 and code-reviewer already
+    // requested changes - the harness resumes straight into the review loop, same setup as the
+    // "resumes the review loop" test above.
+    git(['checkout', '-b', 'harness/issue-1-test-issue'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'existing PR commit',
+      ],
+      workDir,
+    );
+    git(['push', '-u', 'origin', 'harness/issue-1-test-issue'], workDir);
+    git(['checkout', 'main'], workDir);
+
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      {
+        headRefName: 'harness/issue-1-test-issue',
+        labels: [{ name: 'needs-fixup' }],
+      },
+    ]);
+    // The PR stays open and labeled needs-fixup on every review pass; issue-worker's fixup
+    // attempt reports success but never commits anything (e.g. it explored the feedback and
+    // concluded there was nothing to change) - runClaudeCode turns that into a failure. Before the
+    // fix, runReviewLoop returned unconditionally on this failure without escalating, so the PR
+    // stayed open+needs-fixup forever: the next poll's resumePendingReview re-invoked
+    // code-reviewer from a fresh cycle=0 every single time (issue #83).
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({
+      state: 'OPEN',
+      labels: [{ name: 'needs-fixup' }],
+    });
+    process.env.FAKE_CLAUDE_NO_COMMIT = '1';
+
+    const editMarker = join(tmpRoot, 'pr-edit-marker.txt');
+    process.env.FAKE_GH_PR_EDIT_MARKER = editMarker;
+    const issueEditMarker = join(tmpRoot, 'issue-edit-marker.txt');
+    process.env.FAKE_GH_ISSUE_EDIT_MARKER = issueEditMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 2,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+      dashboardPort: 0,
+    };
+
+    // A single runLoop iteration is enough: the fix bounds fixup-failure retries within one
+    // continuous call to runReviewLoop's own cycle loop, rather than needing repeated external
+    // polls that would each reset back to cycle=0.
+    await runLoop(config, workDir, 1);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain(`limite de ${config.maxReviewCycles} cycles de review`);
+
+    expect(existsSync(editMarker)).toBe(true);
+    expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
+
+    expect(existsSync(issueEditMarker)).toBe(true);
+    expect(readFileSync(issueEditMarker, 'utf-8')).toContain('needs-human');
+
+    // code-reviewer was actually invoked maxReviewCycles times (once per cycle), proving the
+    // cycles were genuinely consumed within this single call rather than short-circuited on the
+    // very first fixup failure.
+    const costLog = loadCostLog(workDir);
+    const reviewInvocations = costLog.filter(
+      (entry) =>
+        entry.agent === 'code-reviewer' &&
+        entry.label === 'code-reviewer:harness/issue-1-test-issue',
+    );
+    expect(reviewInvocations).toHaveLength(config.maxReviewCycles);
+  });
+
   it('escalates to needs-human on the issue and PR when the review invocation itself fails (issue #78)', async () => {
     // Before the fix, a failed/budget-exhausted code-reviewer invocation was only logged to
     // stdout - the PR was left open forever with zero trace on GitHub (observed in practice on
