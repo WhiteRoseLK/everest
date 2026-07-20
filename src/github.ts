@@ -261,6 +261,39 @@ export async function remoteMainCommit(cwd: string): Promise<string> {
 }
 
 /**
+ * Memoizes {@link remoteMainCommit} for the lifetime of the cache object. Several independent
+ * call sites within a single harness loop iteration (`restartIfMainAdvanced`'s self-restart check,
+ * the lazy retry of the startup capture, and `hasUnpushedCommit`'s "does this branch already have
+ * an unpushed commit" check) all ask "what commit is `origin/main` at right now" - without this
+ * they each triggered their own `git fetch origin main`, up to three per iteration for no benefit
+ * (issue #87). `runLoop` creates a fresh cache once per iteration and discards it at the end, so a
+ * real advance of `origin/main` mid-run is still picked up on the very next iteration.
+ */
+export interface RemoteMainCommitCache {
+  /** Returns `origin/main`'s current commit SHA, fetching at most once per cache instance. */
+  get(cwd: string): Promise<string>;
+}
+
+/** Creates a fresh, empty {@link RemoteMainCommitCache}. */
+export function createRemoteMainCommitCache(): RemoteMainCommitCache {
+  let pending: Promise<string> | null = null;
+  return {
+    get(cwd: string): Promise<string> {
+      if (!pending) {
+        pending = remoteMainCommit(cwd);
+        // A failed fetch shouldn't poison the cache for the rest of the iteration - clear it so
+        // the next call site gets its own chance to retry the actual fetch, matching the existing
+        // per-call retry behavior callers relied on before this cache existed.
+        pending.catch(() => {
+          pending = null;
+        });
+      }
+      return pending;
+    },
+  };
+}
+
+/**
  * Prefix used for harness-authored WIP checkpoint commit messages (see
  * {@link commitWorkInProgress}). Shared with {@link isUnpushedCommitWipCheckpoint} so a retried
  * push (see {@link hasUnpushedCommit}) can tell whether it needs `--no-verify`, matching whichever
@@ -351,10 +384,19 @@ export function isMissingWorkflowScopeError(error: unknown): boolean {
  * sprint that genuinely produced nothing): re-invoking issue-worker in the former case finds
  * nothing left to do and misreports "no new commit produced" for work that was actually already
  * finished - see issue #61. Returns `false` when HEAD matches `origin/main`, i.e. no commit has
- * been made on the branch yet.
+ * been made on the branch yet. Accepts an optional {@link RemoteMainCommitCache} so this doesn't
+ * trigger its own `git fetch origin main` when the caller already fetched it this iteration
+ * (issue #87); falls back to fetching directly when omitted.
  */
-export async function hasUnpushedCommit(branch: string, cwd: string): Promise<boolean> {
-  const [local, main] = await Promise.all([currentCommit(cwd), remoteMainCommit(cwd)]);
+export async function hasUnpushedCommit(
+  branch: string,
+  cwd: string,
+  mainCommitCache?: RemoteMainCommitCache,
+): Promise<boolean> {
+  const [local, main] = await Promise.all([
+    currentCommit(cwd),
+    mainCommitCache ? mainCommitCache.get(cwd) : remoteMainCommit(cwd),
+  ]);
   if (local === main) return false;
 
   const { stdout } = await execFileAsync('git', ['ls-remote', 'origin', branch], { cwd });
