@@ -110,6 +110,46 @@ describe('runLoop end-to-end', () => {
     );
   });
 
+  it('mutualizes origin/main fetches within a single iteration instead of re-fetching per call site', async () => {
+    // Each `git fetch origin main` invocation appends a line to this log (see
+    // fixtures/fake-bin/git) - lets this test count how many actual network fetches happen,
+    // rather than just asserting on the end result. Without mutualization, a single iteration
+    // that processes an issue does one fetch in restartIfMainAdvanced (the self-restart check)
+    // and a second, redundant one in hasUnpushedCommit - both asking the exact same question,
+    // "what commit is origin/main at right now" (issue #87).
+    const fetchLog = join(tmpRoot, 'git-fetch-main.log');
+    process.env.FAKE_GIT_FETCH_MAIN_LOG = fetchLog;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 100,
+      baseRetryDelayMs: 100,
+      maxRetryDelayMs: 1000,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+      dashboardPort: 0,
+    };
+
+    try {
+      await runLoop(config, workDir, 1);
+
+      expect(existsSync(prMarker)).toBe(true);
+
+      const fetches = readFileSync(fetchLog, 'utf-8').trim().split('\n').filter(Boolean);
+      // 1 fetch for the pre-loop startup capture (its own, separate one-shot cache), plus exactly
+      // 1 more for the whole iteration (shared by restartIfMainAdvanced and hasUnpushedCommit via
+      // the per-iteration cache) - 3 without mutualization.
+      expect(fetches).toHaveLength(2);
+    } finally {
+      delete process.env.FAKE_GIT_FETCH_MAIN_LOG;
+    }
+  });
+
   it('resumes the review loop for an already-open PR labeled needs-fixup', async () => {
     const reviewerMarker = '/tmp/fake-code-reviewer-invoked.marker';
     rmSync(reviewerMarker, { force: true });

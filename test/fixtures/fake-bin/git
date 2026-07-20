@@ -4,11 +4,17 @@ set -euo pipefail
 # Delegates to the real git binary for everything, except it can simulate `git fetch origin main`
 # failing exactly once - used to test that a transient failure capturing `origin/main`'s commit at
 # harness startup (src/loop.ts tryCaptureMainCommit) doesn't permanently disable the self-restart
-# safety net for the process's whole lifetime (issue #43 review feedback). Real git is invoked via
-# an absolute path so this wrapper doesn't recurse on itself through PATH.
+# safety net for the process's whole lifetime (issue #43 review feedback). It can also record every
+# `git fetch origin main` invocation to a log file (FAKE_GIT_FETCH_MAIN_LOG) - used to assert that
+# the harness mutualizes fetches within a single loop iteration instead of re-fetching for every
+# call site that needs origin/main's commit (issue #87). Real git is invoked via an absolute path so
+# this wrapper doesn't recurse on itself through PATH.
 REAL_GIT=/usr/bin/git
 
 if [ "${1:-}" = "fetch" ] && [ "${2:-}" = "origin" ] && [ "${3:-}" = "main" ]; then
+  if [ -n "${FAKE_GIT_FETCH_MAIN_LOG:-}" ]; then
+    echo "fetch" >> "$FAKE_GIT_FETCH_MAIN_LOG"
+  fi
   if [ -f "${FAKE_GIT_FETCH_MAIN_FAIL_ONCE:-}" ]; then
     rm -f "$FAKE_GIT_FETCH_MAIN_FAIL_ONCE"
     echo "fake git: simulated transient fetch failure" >&2

@@ -18,12 +18,13 @@ import {
   markPullRequestNeedsHuman,
   markIssueNeedsHuman,
   commitWorkInProgress,
-  remoteMainCommit,
+  createRemoteMainCommitCache,
   isMissingWorkflowScopeError,
   hasUnpushedCommit,
   isUnpushedCommitWipCheckpoint,
   WIP_CHECKPOINT_PREFIX,
   type Issue,
+  type RemoteMainCommitCache,
 } from './github.js';
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
@@ -333,6 +334,7 @@ async function handleIssue(
   state: HarnessState | null,
   config: Config,
   cwd: string,
+  mainCommitCache: RemoteMainCommitCache,
 ): Promise<void> {
   let branch: string;
   let retryCount: number;
@@ -352,7 +354,7 @@ async function handleIssue(
     );
   }
 
-  if (await hasUnpushedCommit(branch, cwd)) {
+  if (await hasUnpushedCommit(branch, cwd, mainCommitCache)) {
     // A prior sprint on this branch already produced a commit, but its push failed (see the
     // pushBranchWithRetries call sites below - this is what leaves state.json pointing at a
     // branch in exactly this state). That commit is still correct/complete, it's just stuck
@@ -563,7 +565,11 @@ async function resumePendingReview(config: Config, cwd: string): Promise<boolean
  * pick up a new issue. Split out from {@link runLoop} so a single iteration's logic can be
  * wrapped in error isolation without nesting the whole poll loop inside a try/catch.
  */
-async function runIteration(config: Config, cwd: string): Promise<void> {
+async function runIteration(
+  config: Config,
+  cwd: string,
+  mainCommitCache: RemoteMainCommitCache,
+): Promise<void> {
   const state = loadState(cwd);
 
   if (state) {
@@ -581,7 +587,7 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
       );
       clearState(cwd);
     } else {
-      await handleIssue(issue, state, config, cwd);
+      await handleIssue(issue, state, config, cwd, mainCommitCache);
       return;
     }
   }
@@ -598,7 +604,7 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
     return;
   }
 
-  await handleIssue(issue, state, config, cwd);
+  await handleIssue(issue, state, config, cwd, mainCommitCache);
 }
 
 /**
@@ -613,14 +619,17 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
  * restart policy (`restart: unless-stopped` in docker-compose.yml) to relaunch `npm start` with
  * the merged code from the bind-mounted source tree. No in-flight progress is lost: an issue's
  * state lives in `.harness/state.json` (see state.ts), on disk rather than in process memory, so
- * the next process picks up exactly where this one left off.
+ * the next process picks up exactly where this one left off. Reads through `mainCommitCache`
+ * rather than fetching directly, so it shares its fetch with any other call site (e.g.
+ * `hasUnpushedCommit`) that needs the same answer within the same loop iteration - see issue #87.
  */
 async function restartIfMainAdvanced(
   cwd: string,
   startupMainCommit: string,
   exitProcess: (code: number) => void,
+  mainCommitCache: RemoteMainCommitCache,
 ): Promise<boolean> {
-  const latest = await remoteMainCommit(cwd);
+  const latest = await mainCommitCache.get(cwd);
   if (latest === startupMainCommit) return false;
   console.log(
     `origin/main advanced from ${startupMainCommit} to ${latest}; exiting so the container can restart with fresh code`,
@@ -630,13 +639,16 @@ async function restartIfMainAdvanced(
 }
 
 /**
- * Fetches `origin/main`'s current commit, logging a warning instead of throwing if it fails (a
- * transient network blip, e.g. right as the container comes up). Callers treat `null` as "not
- * captured yet" and retry on a later iteration rather than giving up for the process's whole
- * lifetime - see {@link runLoop}.
+ * Fetches `origin/main`'s current commit (through `mainCommitCache`, see issue #87), logging a
+ * warning instead of throwing if it fails (a transient network blip, e.g. right as the container
+ * comes up). Callers treat `null` as "not captured yet" and retry on a later iteration rather than
+ * giving up for the process's whole lifetime - see {@link runLoop}.
  */
-async function tryCaptureMainCommit(cwd: string): Promise<string | null> {
-  return remoteMainCommit(cwd).catch((error: unknown) => {
+async function tryCaptureMainCommit(
+  cwd: string,
+  mainCommitCache: RemoteMainCommitCache,
+): Promise<string | null> {
+  return mainCommitCache.get(cwd).catch((error: unknown) => {
     console.error(
       'Failed to fetch origin/main to capture the startup commit; self-restart detection stays disabled until this succeeds:',
       error,
@@ -703,7 +715,7 @@ export async function runLoop(
   // permanently null - otherwise a transient blip at boot would silently disable the self-restart
   // safety net for the process's whole lifetime, reintroducing the exact bug this loop exists to
   // fix.
-  let startupMainCommit = await tryCaptureMainCommit(cwd);
+  let startupMainCommit = await tryCaptureMainCommit(cwd, createRemoteMainCommitCache());
 
   for (let i = 0; i < iterations; i += 1) {
     // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
@@ -711,13 +723,21 @@ export async function runLoop(
     // of one skipped cycle. Seen in practice: a stale local branch from a budget-exhausted
     // attempt made the next `git checkout -b` throw, killing the container.
     try {
+      // One cache per iteration, shared by every call site below that asks "what commit is
+      // origin/main at right now" - mutualizes what would otherwise be several redundant
+      // `git fetch origin main` calls per iteration (issue #87). Created fresh each iteration so a
+      // real advance of origin/main between iterations is still picked up.
+      const mainCommitCache = createRemoteMainCommitCache();
       if (startupMainCommit === null) {
-        startupMainCommit = await tryCaptureMainCommit(cwd);
+        startupMainCommit = await tryCaptureMainCommit(cwd, mainCommitCache);
       }
-      if (startupMainCommit && (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess))) {
+      if (
+        startupMainCommit &&
+        (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess, mainCommitCache))
+      ) {
         return;
       }
-      await runIteration(config, cwd);
+      await runIteration(config, cwd, mainCommitCache);
     } catch (error) {
       console.error('Unhandled error during loop iteration, continuing after a short delay:');
       console.error(error);
