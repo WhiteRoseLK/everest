@@ -21,6 +21,7 @@ export interface Config {
   maxRetryCount: number;
   pushRetryCount: number;
   pushRetryDelayMs: number;
+  dashboardPort: number;
 }
 
 function required(name: string): string {
@@ -53,5 +54,9 @@ export function loadConfig(): Config {
     // issue #59).
     pushRetryCount: numberEnv('PUSH_RETRY_COUNT', 3),
     pushRetryDelayMs: numberEnv('PUSH_RETRY_DELAY_MS', 5_000),
+    // Port for the read-only status dashboard (see src/dashboard.ts, issue #65). Started
+    // alongside the loop by src/index.ts and published by docker-compose.yml so it's reachable
+    // from the host without needing a shell in the container.
+    dashboardPort: numberEnv('DASHBOARD_PORT', 3000),
   };
 }
