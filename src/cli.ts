@@ -9,7 +9,7 @@ import {
   listBlockers,
 } from './github.js';
 import { buildCatchupSummary, type CatchupSummary } from './catchup.js';
-import { checkHarnessWritable, loadIterationErrors } from './diagnostics.js';
+import { checkGitWritable, checkHarnessWritable, loadIterationErrors } from './diagnostics.js';
 import { loadState } from './state.js';
 
 /** Lookback window used by `everest status` when reporting recently closed issues. */
@@ -170,11 +170,13 @@ export async function runCatchup(repo: string, cwd: string = REPO_ROOT): Promise
 
 /**
  * Handles `everest doctor`: a self-diagnostic for the "loop is alive but makes no progress" class
- * of failure (issue #82), readable from `everest chat` without any docker access. Reports three
+ * of failure (issue #82), readable from `everest chat` without any docker access. Reports four
  * things the container's unreachable stdout otherwise hides: whether `.harness/` is actually
  * writable right now (an unwritable one - the EACCES of issue #75 - stalls every iteration and
- * even swallows the error log itself), which issue the harness currently considers in progress
- * (`state.json`), and the most recent persisted iteration errors (`.harness/errors.jsonl`).
+ * even swallows the error log itself), whether `.git` is actually writable right now (the
+ * bind-mount ownership issue of issue #84 - `checkoutMain` is the very first thing every iteration
+ * does, so this fails identically on every poll), which issue the harness currently considers in
+ * progress (`state.json`), and the most recent persisted iteration errors (`.harness/errors.jsonl`).
  */
 export function runDoctor(cwd: string = REPO_ROOT): void {
   const writable = checkHarnessWritable(cwd);
@@ -187,6 +189,17 @@ export function runDoctor(cwd: string = REPO_ROOT): void {
     console.log(`  ❌ NO - ${writable.error ?? 'unknown error'}`);
     console.log('     This stalls every loop iteration and hides its own error log. See issue #75');
     console.log('     (fix: ensure /app/.harness is owned/writable by the node user).');
+  }
+
+  const gitWritable = checkGitWritable(cwd);
+  console.log();
+  console.log('.git/ writable:');
+  if (gitWritable.writable) {
+    console.log('  ✅ yes');
+  } else {
+    console.log(`  ❌ NO - ${gitWritable.error ?? 'unknown error'}`);
+    console.log('     This stalls every loop iteration at checkoutMain, its very first step.');
+    console.log('     See issue #84 (fix: ensure /app/.git is owned/writable by the node user).');
   }
 
   const state = loadState(cwd);

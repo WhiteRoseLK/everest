@@ -431,4 +431,28 @@ describe('everest CLI end-to-end', () => {
 
     chmodSync(join(tmpRoot, '.harness'), 0o755); // restore so afterEach can clean up
   });
+
+  it('doctor reports .git as writable when the repo checkout is a normal writable directory', () => {
+    mkdirSync(join(tmpRoot, '.git'), { recursive: true });
+
+    runDoctor(tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('.git/ writable:');
+  });
+
+  it('doctor flags an unwritable .git as the likely stall cause (issue #84)', () => {
+    if (typeof process.getuid === 'function' && process.getuid() === 0) return; // root bypasses perms
+    mkdirSync(join(tmpRoot, '.git'), { recursive: true });
+    chmodSync(join(tmpRoot, '.git'), 0o500);
+
+    runDoctor(tmpRoot);
+
+    const output = logSpy.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('.git/ writable:');
+    expect(output).toContain('❌ NO');
+    expect(output).toContain('issue #84');
+
+    chmodSync(join(tmpRoot, '.git'), 0o755); // restore so afterEach can clean up
+  });
 });
