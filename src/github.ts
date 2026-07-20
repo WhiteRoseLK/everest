@@ -248,6 +248,17 @@ export async function currentCommit(cwd: string): Promise<string> {
 }
 
 /**
+ * Returns the commit SHA that the local `branch` ref points to, without relying on it being the
+ * currently checked-out branch (unlike {@link currentCommit}, which resolves `HEAD`). Used by
+ * {@link hasUnpushedCommit} so its answer for `branch` stays correct even if the caller's cwd
+ * happens to have a different branch checked out.
+ */
+async function branchCommit(branch: string, cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['rev-parse', branch], { cwd });
+  return stdout.trim();
+}
+
+/**
  * Fetches and returns the current commit SHA of `origin/main`, without touching the local
  * checkout (unlike {@link checkoutMain}). Used to detect when `origin/main` has advanced past
  * the commit that was live when this process started, so the harness can restart itself and
@@ -377,16 +388,19 @@ export function isMissingWorkflowScopeError(error: unknown): boolean {
 }
 
 /**
- * Returns whether `branch`'s local HEAD already carries a commit that `origin` doesn't have yet
+ * Returns whether `branch`'s local ref already carries a commit that `origin` doesn't have yet
  * - either because `origin` has no ref for the branch at all, or its ref points somewhere else.
+ * Resolves `branch`'s commit directly (`git rev-parse <branch>`) rather than via `HEAD`, so the
+ * answer is correct even if some other branch happens to be checked out in `cwd` (issue #88) -
+ * unlike {@link currentCommit}, which always resolves whatever is currently checked out.
  * Lets callers tell "a prior sprint's commit is already correct/complete but stuck locally
  * because its push failed" apart from "no commit exists yet on this branch" (fresh branch, or a
  * sprint that genuinely produced nothing): re-invoking issue-worker in the former case finds
  * nothing left to do and misreports "no new commit produced" for work that was actually already
- * finished - see issue #61. Returns `false` when HEAD matches `origin/main`, i.e. no commit has
- * been made on the branch yet. Accepts an optional {@link RemoteMainCommitCache} so this doesn't
- * trigger its own `git fetch origin main` when the caller already fetched it this iteration
- * (issue #87); falls back to fetching directly when omitted.
+ * finished - see issue #61. Returns `false` when `branch` matches `origin/main`, i.e. no commit
+ * has been made on the branch yet. Accepts an optional {@link RemoteMainCommitCache} so this
+ * doesn't trigger its own `git fetch origin main` when the caller already fetched it this
+ * iteration (issue #87); falls back to fetching directly when omitted.
  */
 export async function hasUnpushedCommit(
   branch: string,
@@ -394,7 +408,7 @@ export async function hasUnpushedCommit(
   mainCommitCache?: RemoteMainCommitCache,
 ): Promise<boolean> {
   const [local, main] = await Promise.all([
-    currentCommit(cwd),
+    branchCommit(branch, cwd),
     mainCommitCache ? mainCommitCache.get(cwd) : remoteMainCommit(cwd),
   ]);
   if (local === main) return false;

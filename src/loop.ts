@@ -513,8 +513,10 @@ async function handleIssue(
       );
       return;
     }
-    await openPullRequest(config.githubRepo, issue, branch, cwd);
-    console.log(`Opened PR for issue #${issue.number}`);
+    if (!(await hasOpenPullRequest(config.githubRepo, branch))) {
+      await openPullRequest(config.githubRepo, issue, branch, cwd);
+      console.log(`Opened PR for issue #${issue.number}`);
+    }
 
     await runReviewLoop(issue, branch, config, cwd);
   } else {

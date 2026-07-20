@@ -12,6 +12,7 @@ import {
   formatIssueBody,
   createIssuesFromMessage,
   isMissingWorkflowScopeError,
+  hasUnpushedCommit,
 } from '../src/github.js';
 
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
@@ -69,6 +70,74 @@ describe('createBranch', () => {
       encoding: 'utf-8',
     }).trim();
     expect(current).toBe('feature-x');
+  });
+});
+
+describe('hasUnpushedCommit', () => {
+  let tmpRoot: string;
+  let originDir: string;
+  let workDir: string;
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'everest-github-hasunpushed-'));
+    originDir = join(tmpRoot, 'origin.git');
+    workDir = join(tmpRoot, 'work');
+
+    git(['init', '--bare', originDir], tmpRoot);
+    git(['init', workDir], tmpRoot);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'initial',
+      ],
+      workDir,
+    );
+    git(['branch', '-m', 'main'], workDir);
+    git(['remote', 'add', 'origin', originDir], workDir);
+    git(['push', '-u', 'origin', 'main'], workDir);
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("resolves branch's own commit rather than whatever HEAD happens to be checked out (issue #88)", async () => {
+    // Create `feature-x` with a commit that never gets pushed to origin.
+    git(['checkout', '-b', 'feature-x'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'unpushed work',
+      ],
+      workDir,
+    );
+
+    // Simulate the caller's cwd having some *other* branch checked out at call time - `main`,
+    // which is identical to origin/main. Before the fix, hasUnpushedCommit derived the local
+    // commit from HEAD (whatever is checked out), so it would wrongly compare main's commit
+    // (== origin/main) instead of feature-x's, and report no unpushed commit at all.
+    git(['checkout', 'main'], workDir);
+
+    await expect(hasUnpushedCommit('feature-x', workDir)).resolves.toBe(true);
+  });
+
+  it('returns false when the named branch matches origin/main, regardless of what is checked out', async () => {
+    git(['checkout', '-b', 'feature-y'], workDir);
+    git(['checkout', 'main'], workDir);
+
+    await expect(hasUnpushedCommit('feature-y', workDir)).resolves.toBe(false);
   });
 });
 
