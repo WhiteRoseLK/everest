@@ -18,6 +18,13 @@ fi
 
 if [ "$AGENT" = "code-reviewer" ]; then
   echo "fake code-reviewer invoked" > /tmp/fake-code-reviewer-invoked.marker
+  if [ -n "${FAKE_CODE_REVIEWER_FAIL:-}" ]; then
+    # Simulates the review invocation itself failing/exhausting its budget without ever posting
+    # anything to GitHub - used to test that runReviewLoop escalates instead of silently giving
+    # up (issue #78).
+    echo '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget"],"total_cost_usd":0.01}'
+    exit 0
+  fi
   echo '{"type":"result","subtype":"success","is_error":false,"result":"No blocking issues found.","total_cost_usd":0.01}'
   exit 0
 fi

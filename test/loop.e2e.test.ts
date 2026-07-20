@@ -64,6 +64,7 @@ describe('runLoop end-to-end', () => {
     delete process.env.FAKE_GH_PR_EDIT_MARKER;
     delete process.env.FAKE_GH_ISSUE_LIST;
     delete process.env.FAKE_GH_ISSUE_EDIT_MARKER;
+    delete process.env.FAKE_CODE_REVIEWER_FAIL;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -759,6 +760,84 @@ describe('runLoop end-to-end', () => {
 
     expect(existsSync(editMarker)).toBe(true);
     expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
+  });
+
+  it('escalates to needs-human on the issue and PR when the review invocation itself fails (issue #78)', async () => {
+    // Before the fix, a failed/budget-exhausted code-reviewer invocation was only logged to
+    // stdout - the PR was left open forever with zero trace on GitHub (observed in practice on
+    // PRs #70 and #49, which never got a single 'labeled' or 'commented' timeline event).
+    process.env.FAKE_CODE_REVIEWER_FAIL = '1';
+    const editMarker = join(tmpRoot, 'pr-edit-marker.txt');
+    process.env.FAKE_GH_PR_EDIT_MARKER = editMarker;
+    const issueEditMarker = join(tmpRoot, 'issue-edit-marker.txt');
+    process.env.FAKE_GH_ISSUE_EDIT_MARKER = issueEditMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+      dashboardPort: 0,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('review a échoué');
+
+    expect(existsSync(editMarker)).toBe(true);
+    expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
+
+    expect(existsSync(issueEditMarker)).toBe(true);
+    expect(readFileSync(issueEditMarker, 'utf-8')).toContain('needs-human');
+  });
+
+  it('escalates to needs-human when code-reviewer neither merges nor labels the PR needs-fixup (issue #78)', async () => {
+    // Simulates code-reviewer completing successfully but forgetting to apply the needs-fixup
+    // label after commenting (observed in practice on PR #25). Before the fix, runReviewLoop just
+    // logged this and returned, leaving the PR stuck open indefinitely with no signal on GitHub.
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ state: 'OPEN', labels: [] });
+    const editMarker = join(tmpRoot, 'pr-edit-marker.txt');
+    process.env.FAKE_GH_PR_EDIT_MARKER = editMarker;
+    const issueEditMarker = join(tmpRoot, 'issue-edit-marker.txt');
+    process.env.FAKE_GH_ISSUE_EDIT_MARKER = issueEditMarker;
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+      dashboardPort: 0,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+    expect(existsSync(commentMarker)).toBe(true);
+    const commentArgs = readFileSync(commentMarker, 'utf-8');
+    expect(commentArgs).toContain('needs-fixup');
+
+    expect(existsSync(editMarker)).toBe(true);
+    expect(readFileSync(editMarker, 'utf-8')).toContain('needs-human');
+
+    expect(existsSync(issueEditMarker)).toBe(true);
+    expect(readFileSync(issueEditMarker, 'utf-8')).toContain('needs-human');
   });
 
   it('restarts the process once origin/main advances mid-run, instead of running stale code forever', async () => {
