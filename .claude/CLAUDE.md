@@ -6,7 +6,7 @@ Développer ce projet en continu, en s'auto-améliorant autant que possible. Git
 
 ## Architecture Overview
 
-`src/loop.ts` lit les issues ouvertes (FIFO, `priority:high` en premier), crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
+`src/loop.ts` lit les issues ouvertes et les trie par priorité via `pickNextIssue` : 4 tiers (`priority:critical` > `priority:high` > `priority:medium` > `priority:low`, `PRIORITY_TIERS`), une issue sans label de priorité étant traitée comme `priority:medium` par défaut, puis FIFO (plus ancienne d'abord) au sein d'un même tier. Une fois l'issue choisie, il crée une branche, invoque `claude -p --agent issue-worker` en mode `bypassPermissions` dans un sandbox Docker, vérifie qu'un commit a bien été produit, pousse la branche et ouvre la PR. Tout tourne en dehors d'une conversation longue : chaque issue = une invocation fraîche, pas de contexte accumulé entre issues. L'agent `issue-worker` (`.claude/agents/issue-worker.md`) peut lui-même ouvrir de nouvelles issues quand il repère des améliorations hors scope — c'est la boucle d'auto-amélioration.
 
 ### Auto-redémarrage du process (issue #43)
 
