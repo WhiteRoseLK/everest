@@ -116,6 +116,28 @@ titre dérivé.
 
 Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans le `PATH`.
 
+## Dashboard web (lecture seule)
+
+En complément de la CLI, `npm start` (`src/index.ts`) démarre automatiquement un petit serveur
+HTTP (`src/dashboard.ts`, sans dépendance ajoutée — juste `node:http`) sur le port `DASHBOARD_PORT`
+(défaut `3000`, voir `.env.example`), publié par `docker-compose.yml` sur `127.0.0.1` uniquement
+par défaut (pas toutes les interfaces — le dashboard n'est pas authentifié ; overridable via
+`DASHBOARD_BIND`) — accessible depuis l'hôte sur `http://localhost:3000` une fois le conteneur
+`harness` démarré. Il tourne en parallèle de la boucle principale, pas à sa place : une erreur
+synchrone au démarrage du serveur est capturée et journalisée sans empêcher la boucle de tourner,
+et un échec de bind asynchrone (`EADDRINUSE`, etc.) est intercepté via un listener `'error'` sur le
+`Server` plutôt que de remonter en exception non gérée (le dashboard est strictement additif).
+
+La page regroupe, à l'aide d'un poll JS (`fetch('/api/status')` toutes les 5s, pas de WebSocket) :
+le sprint en cours (issue/branche/depuis quand/tentative, lu directement dans
+`.harness/state.json` via `loadState` — la même source que `everest doctor`), les PR ouvertes du
+harnais avec leur statut de review (comme `everest status`), les issues fermées récemment (comme
+`everest status`) et les blockers `needs-human` avec leur dernier commentaire (comme `everest
+blockers`). Réutilise volontairement les mêmes fonctions `src/github.ts` que ces commandes CLI
+plutôt que d'inventer de nouvelles requêtes `gh`, pour que le dashboard ne puisse jamais diverger
+de ce qu'elles rapportent. Lecture seule pour cette première version — pas d'action possible depuis
+l'UI (voir issue #65).
+
 ## Structure
 
 - `src/loop.ts` — boucle principale
@@ -126,4 +148,5 @@ Nécessite `GITHUB_REPO` (voir `.env`/`src/config.ts`) et `gh` authentifié dans
 - `src/prompt.ts` — construction du prompt + instructions QA E2E
 - `src/cost.ts` — journal disque (`.harness/cost-log.jsonl`) du coût token (`total_cost_usd`) de chaque invocation, pour mesurer avant d'envisager une compression de contexte (voir issue #13)
 - `src/cli.ts` / `bin/everest.js` — CLI `everest` (voir section CLI ci-dessus)
+- `src/dashboard.ts` — serveur HTTP du dashboard web en lecture seule (voir section ci-dessus)
 - `.claude/agents/chat.md` — agent interactif utilisé par `everest chat`

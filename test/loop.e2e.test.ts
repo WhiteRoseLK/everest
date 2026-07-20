@@ -80,6 +80,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -144,6 +145,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -175,6 +177,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 2,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // maxRetryCount = 2 means 3 total attempts (retryCount goes 1, 2, 3) before giving up;
@@ -214,6 +217,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 1,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // maxRetryCount = 1 means 2 total attempts before giving up.
@@ -259,6 +263,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // Iteration 1 hits the simulated `gh issue list` failure and must not crash the process;
@@ -298,6 +303,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -323,6 +329,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // The budget guardrail is on the sprint, not the issue: hitting it should not abandon the
@@ -354,6 +361,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -387,6 +395,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -429,6 +438,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -474,6 +484,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 3,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -521,6 +532,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // Two runLoop iterations: the first sprint commits and fails to push (exhausting its single
@@ -557,6 +569,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 2,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
@@ -602,6 +615,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // A single iteration is enough: with the old generic-retry behavior this would only save a
@@ -646,6 +660,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -681,6 +696,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 2,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // maxRetryCount = 2 means 3 total sprints (retryCount goes 1, 2, 3) before giving up; one
@@ -731,6 +747,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     await runLoop(config, workDir, 1);
@@ -764,6 +781,7 @@ describe('runLoop end-to-end', () => {
       maxRetryCount: 10,
       pushRetryCount: 1,
       pushRetryDelayMs: 1,
+      dashboardPort: 0,
     };
 
     // Iteration 1 processes issue #1 end to end (origin/main advances as a side effect along
@@ -804,6 +822,7 @@ describe('runLoop end-to-end', () => {
         maxRetryCount: 10,
         pushRetryCount: 1,
         pushRetryDelayMs: 1,
+        dashboardPort: 0,
       };
 
       try {
