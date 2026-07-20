@@ -14,6 +14,7 @@ export interface Config {
   maxBudgetUsdPerIssue: number;
   maxBudgetUsdPerReview: number;
   maxReviewCycles: number;
+  maxConcurrentReviews: number;
   pollIntervalMs: number;
   watchPollIntervalMs: number;
   baseRetryDelayMs: number;
@@ -42,6 +43,12 @@ export function loadConfig(): Config {
     maxBudgetUsdPerIssue: numberEnv('MAX_BUDGET_USD_PER_ISSUE', 2),
     maxBudgetUsdPerReview: numberEnv('MAX_BUDGET_USD_PER_REVIEW', 1),
     maxReviewCycles: numberEnv('MAX_REVIEW_CYCLES', 3),
+    // Caps how many review/fixup loops (see runReviewLoop in src/loop.ts) can run concurrently,
+    // each in its own throwaway clone (see createReviewClone in src/github.ts) so a PR stuck in
+    // review never blocks the harness from starting dev work on the next issue (issue #96). Not
+    // unbounded: each slot spawns its own `claude -p` subprocess, so this is also a cost/resource
+    // guardrail, not just a concurrency knob.
+    maxConcurrentReviews: numberEnv('MAX_CONCURRENT_REVIEWS', 2),
     pollIntervalMs: numberEnv('POLL_INTERVAL_MS', 60_000),
     watchPollIntervalMs: numberEnv('WATCH_POLL_INTERVAL_MS', 30_000),
     baseRetryDelayMs: numberEnv('BASE_RETRY_DELAY_MS', 60_000),
