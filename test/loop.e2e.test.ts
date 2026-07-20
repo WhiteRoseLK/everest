@@ -1143,4 +1143,69 @@ describe('runLoop end-to-end', () => {
       }
     },
   );
+
+  it('does not re-open a PR that already exists on the success path (issue #88)', async () => {
+    // Simulates a resumed sprint: a prior attempt already pushed a commit and opened a PR for
+    // this issue's branch, but the harness stopped before clearState() ran (e.g. crashed mid
+    // review loop), leaving state.json pointing at the branch. Before the fix, the `result.success`
+    // branch of handleIssue called openPullRequest unconditionally - unlike the WIP-checkpoint and
+    // unpushed-commit paths, which both guard on hasOpenPullRequest first - so resuming here would
+    // call `gh pr create` again on a branch that already has one open.
+    git(['checkout', '-b', 'harness/issue-1-test-issue'], workDir);
+    git(
+      [
+        '-c',
+        'user.email=test@test.local',
+        '-c',
+        'user.name=Test',
+        'commit',
+        '--allow-empty',
+        '-m',
+        'previously finished work',
+      ],
+      workDir,
+    );
+    git(['push', '-u', 'origin', 'harness/issue-1-test-issue'], workDir);
+    git(['checkout', 'main'], workDir);
+
+    process.env.FAKE_GH_PR_LIST = JSON.stringify([
+      { number: 1, headRefName: 'harness/issue-1-test-issue', labels: [] },
+    ]);
+    // Simulates code-reviewer deciding to merge on this resumed pass.
+    process.env.FAKE_GH_PR_VIEW = JSON.stringify({ state: 'MERGED', labels: [] });
+
+    mkdirSync(join(workDir, '.harness'), { recursive: true });
+    writeFileSync(
+      join(workDir, '.harness/state.json'),
+      JSON.stringify({
+        issueNumber: 1,
+        branch: 'harness/issue-1-test-issue',
+        startedAt: '2026-07-20T00:00:00Z',
+        retryCount: 0,
+      }),
+    );
+
+    const config: Config = {
+      githubRepo: 'fake/repo',
+      maxBudgetUsdPerIssue: 1,
+      maxBudgetUsdPerReview: 1,
+      maxReviewCycles: 3,
+      watchPollIntervalMs: 30_000,
+      pollIntervalMs: 1,
+      baseRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      maxRetryCount: 10,
+      pushRetryCount: 1,
+      pushRetryDelayMs: 1,
+      dashboardPort: 0,
+    };
+
+    await runLoop(config, workDir, 1);
+
+    // The fake issue-worker sprint ran and produced a new commit (result.success), but since the
+    // branch already had an open PR, openPullRequest (`gh pr create`) must not have been called.
+    expect(existsSync(prMarker)).toBe(false);
+    const statePath = join(workDir, '.harness/state.json');
+    expect(existsSync(statePath)).toBe(false);
+  });
 });
