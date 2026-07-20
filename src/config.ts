@@ -32,7 +32,15 @@ function required(name: string): string {
 
 function numberEnv(name: string, fallback: number): number {
   const value = process.env[name];
-  return value ? Number(value) : fallback;
+  if (!value) return fallback;
+  const parsed = Number(value);
+  // `Number('')` is 0 and whitespace-only strings also coerce to 0, but any other non-numeric
+  // value (typo, stray text) yields `NaN`, which would otherwise propagate silently into things
+  // like `setTimeout` delays or budget comparisons that always evaluate to `false` (issue #86).
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Invalid value for env var ${name}: ${JSON.stringify(value)} is not a number`);
+  }
+  return parsed;
 }
 
 /** Loads and validates harness configuration from environment variables (see .env.example). */
