@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,27 +10,27 @@ import { join } from 'node:path';
 // into places like retry-count comparisons or `setTimeout` delays, which behave in confusing,
 // hard-to-diagnose ways (e.g. `NaN < maxRetryCount` is always `false`) rather than surfacing the
 // misconfiguration immediately.
+//
+// Deliberately does not touch the shared project-root `.env` file (unlike
+// `test/config.e2e.test.ts`, which needs it to test `.env` resolution itself): vitest runs
+// separate test files concurrently by default, so two files both mutating the same `.env` in
+// `beforeEach`/`afterEach` race on read/write and produce intermittent failures (observed on
+// this issue's first PR revision). `process.env` values always win over `.env` per dotenv's
+// default precedence, so passing `GITHUB_REPO`/`MAX_RETRY_COUNT` directly via `spawnSync`'s
+// `env` option is sufficient here and avoids the shared-file mutation entirely.
 
 const PROJECT_ROOT = join(import.meta.dirname, '..');
-const ENV_PATH = join(PROJECT_ROOT, '.env');
 const BIN_PATH = join(PROJECT_ROOT, 'bin/everest.js');
 const FAKE_BIN = join(import.meta.dirname, 'fixtures/fake-bin');
 
 describe('numberEnv rejects non-numeric values (issue #86)', () => {
   let tmpRoot: string;
-  let envExisted: boolean;
-  let envBackup: string;
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'everest-config-invalid-number-'));
-    envExisted = existsSync(ENV_PATH);
-    envBackup = envExisted ? readFileSync(ENV_PATH, 'utf-8') : '';
-    writeFileSync(ENV_PATH, 'GITHUB_REPO=fake/repo\n');
   });
 
   afterEach(() => {
-    if (envExisted) writeFileSync(ENV_PATH, envBackup);
-    else rmSync(ENV_PATH, { force: true });
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -39,7 +39,7 @@ describe('numberEnv rejects non-numeric values (issue #86)', () => {
       cwd: tmpRoot,
       env: {
         ...process.env,
-        GITHUB_REPO: undefined,
+        GITHUB_REPO: 'fake/repo',
         MAX_RETRY_COUNT: 'ten',
         PATH: `${FAKE_BIN}:${process.env.PATH ?? ''}`,
       },
@@ -55,7 +55,7 @@ describe('numberEnv rejects non-numeric values (issue #86)', () => {
       cwd: tmpRoot,
       env: {
         ...process.env,
-        GITHUB_REPO: undefined,
+        GITHUB_REPO: 'fake/repo',
         MAX_RETRY_COUNT: '',
         PATH: `${FAKE_BIN}:${process.env.PATH ?? ''}`,
       },
