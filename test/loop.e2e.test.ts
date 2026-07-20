@@ -845,4 +845,46 @@ describe('runLoop end-to-end', () => {
       }
     },
   );
+
+  it(
+    'includes a concrete diagnostic summary (reason, branch, attempt count) in the give-up ' +
+      'comment instead of a generic sentence (issue #76)',
+    async () => {
+      // Before the fix, every give-up comment was the same fixed sentence regardless of why the
+      // harness gave up - on issue #47 this produced 8 near-identical comments with no clue about
+      // the actual blocker. Reusing the "no new commit produced" failure mode (issue #57) here:
+      // its `reason` string is exactly the kind of concrete diagnostic (e.g. it could just as well
+      // carry a failing `npm run typecheck` output) that must now show up in the comment.
+      process.env.FAKE_CLAUDE_NO_COMMIT = '1';
+
+      const config: Config = {
+        githubRepo: 'fake/repo',
+        maxBudgetUsdPerIssue: 1,
+        maxBudgetUsdPerReview: 1,
+        maxReviewCycles: 3,
+        watchPollIntervalMs: 30_000,
+        pollIntervalMs: 1,
+        baseRetryDelayMs: 1,
+        maxRetryDelayMs: 1,
+        maxRetryCount: 2,
+        pushRetryCount: 1,
+        pushRetryDelayMs: 1,
+        dashboardPort: 0,
+      };
+
+      // maxRetryCount = 2 means 3 total sprints before giving up (see the #57 test above).
+      await runLoop(config, workDir, 3);
+
+      const commentMarker = process.env.FAKE_GH_COMMENT_MARKER!;
+      expect(existsSync(commentMarker)).toBe(true);
+      const commentArgs = readFileSync(commentMarker, 'utf-8');
+
+      // The technical reason (not just "intervention humaine nécessaire").
+      expect(commentArgs).toContain('no new commit produced');
+      // The branch worked on, so a human can jump straight to its PR/logs.
+      expect(commentArgs).toContain('harness/issue-1-test-issue');
+      // How many sprints were actually spent, not just the configured cap.
+      expect(commentArgs).toContain('3 sprints (limite : 2)');
+    },
+  );
 });
