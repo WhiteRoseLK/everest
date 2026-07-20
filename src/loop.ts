@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { Config } from './config.js';
 import {
   listOpenIssues,
@@ -27,7 +28,7 @@ import {
 import { runClaudeCode, runCodeReview, type ClaudeResult } from './claude.js';
 import { saveState, loadState, clearState, type HarnessState } from './state.js';
 import { buildPrompt, buildFixupPrompt } from './prompt.js';
-import { recordIterationError } from './diagnostics.js';
+import { recordIterationError, checkGitWritable, checkHarnessWritable } from './diagnostics.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -644,6 +645,49 @@ async function tryCaptureMainCommit(cwd: string): Promise<string | null> {
   });
 }
 
+/**
+ * Verifies, once before the poll loop starts, that `.git` and `.harness/` are actually writable by
+ * this process. Without this, an unwritable path (the bind-mount ownership bug of issue #84) only
+ * surfaces inside the per-iteration try/catch below: `checkoutMain` throws EACCES on `runIteration`'s
+ * very first move, every single iteration, forever - the loop stays "alive" (a new line appended to
+ * `.harness/errors.jsonl` every poll) but never makes any progress, and that fact is invisible
+ * without running `everest doctor` by hand (issue #82). Failing fast here instead turns that into an
+ * explicit, actionable message on the very first `docker compose logs`, and a non-zero exit that
+ * `restart: unless-stopped` will retry - so a transient glitch (e.g. the entrypoint hasn't finished
+ * chowning yet) still recovers on its own, but a persistent misconfiguration is loud rather than
+ * silent (issue #94). Returns `false` when it exited (or would have, via the injected `exitProcess`
+ * mock in tests) so {@link runLoop} knows not to enter the loop at all.
+ */
+function runStartupWritabilityPreflight(cwd: string, exitProcess: (code: number) => void): boolean {
+  const problems: string[] = [];
+  const git = checkGitWritable(cwd);
+  if (!git.writable) {
+    problems.push(`'${join(cwd, '.git')}' is not writable by the current user (${git.error})`);
+  }
+  const harness = checkHarnessWritable(cwd);
+  if (!harness.writable) {
+    problems.push(
+      `'${join(cwd, '.harness')}' is not writable by the current user (${harness.error})`,
+    );
+  }
+  if (problems.length === 0) return true;
+
+  console.error('FATAL: startup writability preflight failed - the harness cannot make progress:');
+  for (const problem of problems) console.error(`  - ${problem}`);
+  console.error(
+    '  This is almost always the bind-mount ownership issue - see issue #84 (the container user ' +
+      "does not own these paths; the entrypoint's chown should fix this on the next container " +
+      'start). Exiting now instead of looping silently on the same error every poll interval - ' +
+      'see issue #94.',
+  );
+  recordIterationError(
+    new Error(`Startup writability preflight failed: ${problems.join('; ')}`),
+    cwd,
+  );
+  exitProcess(1);
+  return false;
+}
+
 /** Runs the harness loop: poll for the next issue, process it, repeat, for `iterations` cycles. */
 export async function runLoop(
   config: Config,
@@ -651,6 +695,8 @@ export async function runLoop(
   iterations = Infinity,
   exitProcess: (code: number) => void = process.exit,
 ): Promise<void> {
+  if (!runStartupWritabilityPreflight(cwd, exitProcess)) return;
+
   // Captured once per process, not per iteration: this is "the code currently loaded in memory",
   // which only changes when the process itself restarts - see restartIfMainAdvanced. If the
   // initial fetch fails, it's retried lazily below on subsequent iterations rather than left

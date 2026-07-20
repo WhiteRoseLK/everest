@@ -6,6 +6,7 @@ import {
   recordIterationError,
   loadIterationErrors,
   checkHarnessWritable,
+  checkGitWritable,
 } from '../src/diagnostics.js';
 
 // chmod-based permission tests are meaningless as root (root bypasses file permissions), so skip
@@ -20,11 +21,16 @@ describe('diagnostics', () => {
   });
 
   afterEach(() => {
-    // Restore write perms first so a test that chmod'd .harness read-only can be cleaned up.
+    // Restore write perms first so a test that chmod'd .harness/.git read-only can be cleaned up.
     try {
       chmodSync(join(cwd, '.harness'), 0o755);
     } catch {
       // ignore - .harness may not exist for every test
+    }
+    try {
+      chmodSync(join(cwd, '.git'), 0o755);
+    } catch {
+      // ignore - .git may not exist for every test
     }
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -100,4 +106,24 @@ describe('diagnostics', () => {
       expect(result.error).toBeTruthy();
     },
   );
+
+  it('checkGitWritable reports not-writable when .git does not exist', () => {
+    const result = checkGitWritable(cwd);
+    expect(result.writable).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+
+  it('checkGitWritable reports writable for a normal .git directory', () => {
+    mkdirSync(join(cwd, '.git'), { recursive: true });
+    expect(checkGitWritable(cwd)).toEqual({ writable: true });
+  });
+
+  it.skipIf(isRoot)('checkGitWritable reports not-writable for a read-only .git', () => {
+    mkdirSync(join(cwd, '.git'), { recursive: true });
+    chmodSync(join(cwd, '.git'), 0o500);
+    const result = checkGitWritable(cwd);
+    expect(result.writable).toBe(false);
+    expect(result.error).toBeTruthy();
+    chmodSync(join(cwd, '.git'), 0o755); // restore so afterEach can clean up
+  });
 });

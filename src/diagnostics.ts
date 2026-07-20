@@ -102,3 +102,28 @@ export function checkHarnessWritable(cwd: string): HarnessWritableCheck {
     return { writable: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
+
+/**
+ * Probes whether `.git` is actually writable *right now*, the same way {@link checkHarnessWritable}
+ * probes `.harness/`. This exists because `runIteration`'s very first move on every cycle is a git
+ * operation (`checkoutMain`), so an unwritable `.git` (the bind-mount ownership issue of issue #84)
+ * fails identically on every single poll - without a dedicated probe this looks, from the outside,
+ * exactly like any other transient per-iteration error swallowed by `runLoop`'s try/catch, instead
+ * of the permanent, actionable condition it actually is (issue #94). Unlike `.harness/`, `.git` is
+ * expected to already exist (this *is* the harness's own repo checkout), so a missing `.git` is
+ * reported as not-writable too rather than silently treated as fine.
+ */
+export function checkGitWritable(cwd: string): HarnessWritableCheck {
+  const gitDir = join(cwd, '.git');
+  if (!existsSync(gitDir)) {
+    return { writable: false, error: `${gitDir} does not exist` };
+  }
+  const witness = join(gitDir, `.write-probe-${process.pid}`);
+  try {
+    writeFileSync(witness, '');
+    rmSync(witness, { force: true });
+    return { writable: true };
+  } catch (error) {
+    return { writable: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
