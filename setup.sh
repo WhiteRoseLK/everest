@@ -63,11 +63,14 @@ shell_rc_file() {
 # Ajoute un alias `everest` qui exécute la CLI *dans* le conteneur (`docker compose exec`)
 # plutôt que sur l'hôte : l'hôte n'a que Docker (voir Prérequis), pas Node, donc `node
 # bin/everest.js` ne peut tourner que côté conteneur, qui l'embarque déjà (voir Dockerfile).
+# `-u node` est indispensable : le conteneur démarre en root (son entrypoint réaligne l'ownership
+# du repo bind-monté sur node avant de dropper vers node - voir docker-entrypoint.sh / issue #84),
+# donc un `exec` sans `-u` tournerait en root, ce que `bypassPermissions` de Claude Code refuse.
 # Idempotent : ne réécrit rien si l'alias est déjà présent.
 ensure_alias() {
   local rc_file
   rc_file="$(shell_rc_file)"
-  local alias_line="alias everest='docker compose --project-directory \"$REPO_DIR\" exec harness node bin/everest.js'"
+  local alias_line="alias everest='docker compose --project-directory \"$REPO_DIR\" exec -u node harness node bin/everest.js'"
 
   if [ -f "$rc_file" ] && grep -qF "alias everest=" "$rc_file"; then
     log "Alias 'everest' déjà présent dans $rc_file."

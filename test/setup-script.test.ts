@@ -54,9 +54,11 @@ describe('setup.sh', () => {
    * without needing Node on the host, since the host's only prerequisite is Docker (see README).
    * setup.sh installs a shell alias that routes through the container instead.
    */
-  it('installs an `everest` shell alias that runs the CLI inside the container', () => {
+  it('installs an `everest` shell alias that runs the CLI inside the container as the node user', () => {
     expect(script).toMatch(/alias everest=/);
-    expect(script).toMatch(/docker compose .*exec harness node bin\/everest\.js/);
+    // `-u node`: the container starts as root (its entrypoint realigns /app ownership before
+    // dropping to node - issue #84), so the alias must exec as node, not root.
+    expect(script).toMatch(/docker compose .*exec -u node harness node bin\/everest\.js/);
   });
 
   it('is idempotent about the alias: skips re-adding it if already present', () => {

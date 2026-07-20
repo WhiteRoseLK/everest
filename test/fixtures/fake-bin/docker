@@ -15,6 +15,9 @@ if [ "${1:-}" = "compose" ] && [ "${2:-}" = "up" ]; then
 fi
 
 if [ "${1:-}" = "compose" ] && [ "${2:-}" = "exec" ]; then
+  # Record the full exec argv so tests can assert on the flags before `claude` (e.g. `-u node`,
+  # which keeps the chat session non-root now that the container starts as root - see issue #84).
+  echo "fake docker compose exec invoked: $*" > /tmp/fake-docker-compose-exec.marker
   # Strip everything up to and including the `claude` token (flags like `-it`, the service name
   # `harness`, etc.) and hand the rest off to the fake `claude` binary, mirroring how a real
   # `docker compose exec -it harness claude ...` runs `claude` inside the container.
