@@ -21,6 +21,8 @@ import {
   isMissingWorkflowScopeError,
   hasUnpushedCommit,
   isUnpushedCommitWipCheckpoint,
+  createReviewClone,
+  removeReviewClone,
   WIP_CHECKPOINT_PREFIX,
   type Issue,
 } from './github.js';
@@ -30,6 +32,87 @@ import { buildPrompt, buildFixupPrompt } from './prompt.js';
 import { recordIterationError } from './diagnostics.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A simple counting semaphore, used by {@link ReviewScheduler} to cap how many review/fixup
+ * loops run concurrently (`config.maxConcurrentReviews`) - each one spawns its own `claude -p`
+ * subprocess, so this is a resource/cost guardrail, not just a scheduling detail.
+ */
+class Semaphore {
+  private available: number;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(permits: number) {
+    this.available = permits;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.available > 0) {
+      this.available -= 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.queue.push(resolve));
+  }
+
+  release(): void {
+    const next = this.queue.shift();
+    if (next) next();
+    else this.available += 1;
+  }
+}
+
+/**
+ * Runs review/fixup loops in the background, decoupled from dev work (issue #96): before this,
+ * `handleIssue` awaited `runReviewLoop` inline, so a PR stuck in review (possibly several fixup
+ * cycles) blocked the whole harness from even looking at the next issue. `schedule` fires a review
+ * off in its own throwaway clone (see `createReviewClone` in github.ts, needed because `claude -p`
+ * invocations now run via async `spawn` instead of blocking `spawnSync` - see claude.ts - so a
+ * concurrent dev sprint in `mainCwd` and a review in its clone can genuinely interleave) and
+ * returns immediately; `waitForIdle` lets `runLoop` drain outstanding reviews before it returns
+ * (tests) or before the process restarts (`restartIfMainAdvanced`), so in-flight review work isn't
+ * silently dropped whenever avoidable.
+ */
+interface ReviewScheduler {
+  schedule(issue: Issue, branch: string): void;
+  waitForIdle(): Promise<void>;
+}
+
+/** Creates a {@link ReviewScheduler} bounded by `config.maxConcurrentReviews`. */
+function createReviewScheduler(config: Config, mainCwd: string): ReviewScheduler {
+  const active = new Map<string, Promise<void>>();
+  const semaphore = new Semaphore(Math.max(1, config.maxConcurrentReviews));
+
+  function schedule(issue: Issue, branch: string): void {
+    if (active.has(branch)) return;
+
+    const task = (async () => {
+      await semaphore.acquire();
+      let clonePath: string | null = null;
+      try {
+        clonePath = await createReviewClone(mainCwd, branch);
+        await runReviewLoop(issue, branch, config, clonePath);
+      } catch (error) {
+        console.error(
+          `Review task for issue #${issue.number} (branch ${branch}) failed unexpectedly:`,
+          error,
+        );
+      } finally {
+        if (clonePath) await removeReviewClone(clonePath);
+        semaphore.release();
+      }
+    })().finally(() => {
+      active.delete(branch);
+    });
+
+    active.set(branch, task);
+  }
+
+  async function waitForIdle(): Promise<void> {
+    await Promise.allSettled([...active.values()]);
+  }
+
+  return { schedule, waitForIdle };
+}
 
 /**
  * Priority tiers, ranked from most to least urgent. An issue's rank is the lowest (most urgent)
@@ -161,7 +244,10 @@ async function pushBranchWithRetries(
  * merges instead). If it's not ready, code-reviewer applies {@link NEEDS_FIXUP_LABEL} (not
  * `gh pr review --request-changes`, which also fails on your own PR); this re-invokes
  * issue-worker with the feedback and re-reviews - repeating until merged or `maxReviewCycles`
- * is reached (a launch budget, so a stuck disagreement can't loop forever).
+ * is reached (a launch budget, so a stuck disagreement can't loop forever). `cwd` is a dedicated
+ * clone of the branch (see {@link createReviewClone}), not the main harness checkout - callers
+ * run this in the background via a {@link ReviewScheduler} so it never blocks dev work on other
+ * issues (issue #96).
  */
 async function runReviewLoop(
   issue: Issue,
@@ -287,6 +373,7 @@ async function handleIssue(
   state: HarnessState | null,
   config: Config,
   cwd: string,
+  scheduler: ReviewScheduler,
 ): Promise<void> {
   let branch: string;
   let retryCount: number;
@@ -344,8 +431,11 @@ async function handleIssue(
       await openPullRequest(config.githubRepo, issue, branch, cwd);
       console.log(`Opened PR for issue #${issue.number}`);
     }
-    await runReviewLoop(issue, branch, config, cwd);
+    // Dev's work here is done: clear state and hand the branch off to a backgrounded review
+    // (issue #96) instead of blocking on the whole review/fixup loop before this call returns -
+    // that used to keep the harness from even looking at the next issue until this one merged.
     clearState(cwd);
+    scheduler.schedule(issue, branch);
     return;
   }
 
@@ -433,7 +523,9 @@ async function handleIssue(
       await openPullRequest(config.githubRepo, issue, branch, cwd);
       console.log(`Opened WIP PR for issue #${issue.number}`);
     }
-    await runReviewLoop(issue, branch, config, cwd);
+    clearState(cwd);
+    scheduler.schedule(issue, branch);
+    return;
   } else if (result.success) {
     try {
       await pushBranchWithRetries(branch, cwd, config);
@@ -468,7 +560,9 @@ async function handleIssue(
     await openPullRequest(config.githubRepo, issue, branch, cwd);
     console.log(`Opened PR for issue #${issue.number}`);
 
-    await runReviewLoop(issue, branch, config, cwd);
+    clearState(cwd);
+    scheduler.schedule(issue, branch);
+    return;
   } else {
     // Bounded by maxRetryCount via retryFreshSprintOrGiveUp instead of unconditionally
     // commenting and clearing state on every single failure: this branch also covers
@@ -489,27 +583,28 @@ async function handleIssue(
     );
     return;
   }
-
-  clearState(cwd);
 }
 
 /**
  * Resumes the review loop on an already-open harness PR labeled {@link NEEDS_FIXUP_LABEL}, e.g.
- * because the harness stopped between opening the PR and it getting merged. Returns whether
- * a PR was found and resumed, so the caller can skip picking a new issue this iteration.
+ * because the harness stopped between opening the PR and it getting merged. Scheduling is
+ * idempotent (see `ReviewScheduler.schedule`) and non-blocking, so this can safely be called on
+ * every iteration instead of only when no other work is happening (issue #96).
  */
-async function resumePendingReview(config: Config, cwd: string): Promise<boolean> {
+async function resumePendingReview(
+  config: Config,
+  cwd: string,
+  scheduler: ReviewScheduler,
+): Promise<void> {
   const resumable = await findResumablePullRequest(config.githubRepo);
-  if (!resumable) return false;
+  if (!resumable) return;
 
   const issues = await listOpenIssues(config.githubRepo);
   const issue = issues.find((candidate) => candidate.number === resumable.issueNumber) ?? null;
-  if (!issue) return false;
+  if (!issue) return;
 
   console.log(`Resuming review loop for issue #${issue.number} on branch ${resumable.branch}`);
-  await checkoutBranch(resumable.branch, cwd);
-  await runReviewLoop(issue, resumable.branch, config, cwd);
-  return true;
+  scheduler.schedule(issue, resumable.branch);
 }
 
 /**
@@ -517,7 +612,7 @@ async function resumePendingReview(config: Config, cwd: string): Promise<boolean
  * pick up a new issue. Split out from {@link runLoop} so a single iteration's logic can be
  * wrapped in error isolation without nesting the whole poll loop inside a try/catch.
  */
-async function runIteration(config: Config, cwd: string): Promise<void> {
+async function runIteration(config: Config, cwd: string, scheduler: ReviewScheduler): Promise<void> {
   const state = loadState(cwd);
 
   if (state) {
@@ -535,12 +630,14 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
       );
       clearState(cwd);
     } else {
-      await handleIssue(issue, state, config, cwd);
+      await handleIssue(issue, state, config, cwd, scheduler);
       return;
     }
   }
 
-  if (await resumePendingReview(config, cwd)) return;
+  // Non-blocking (issue #96): a review already in flight is a no-op here, and a newly-found one
+  // is scheduled in the background - either way this never delays picking up the next issue.
+  await resumePendingReview(config, cwd, scheduler);
 
   const issues = await listOpenIssues(config.githubRepo);
   const withoutOpenPr = await filterOutIssuesWithOpenPr(issues, config.githubRepo);
@@ -552,7 +649,7 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
     return;
   }
 
-  await handleIssue(issue, state, config, cwd);
+  await handleIssue(issue, state, config, cwd, scheduler);
 }
 
 /**
@@ -565,20 +662,25 @@ async function runIteration(config: Config, cwd: string): Promise<void> {
  * itself) would silently keep running under the old, buggy code indefinitely - see issue #43,
  * where this happened in practice with the fix from #39. Exiting relies on the container's
  * restart policy (`restart: unless-stopped` in docker-compose.yml) to relaunch `npm start` with
- * the merged code from the bind-mounted source tree. No in-flight progress is lost: an issue's
- * state lives in `.harness/state.json` (see state.ts), on disk rather than in process memory, so
- * the next process picks up exactly where this one left off.
+ * the merged code from the bind-mounted source tree. Dev progress is never lost: an issue's state
+ * lives in `.harness/state.json` (see state.ts), on disk rather than in process memory. Review
+ * progress (backgrounded since issue #96) has no local checkpoint, only the PR's GitHub labels -
+ * so `scheduler.waitForIdle()` is awaited first, giving any in-flight review/fixup cycle a chance
+ * to reach a stable, resumable state before the process exits, rather than risking an abrupt kill
+ * mid-review.
  */
 async function restartIfMainAdvanced(
   cwd: string,
   startupMainCommit: string,
   exitProcess: (code: number) => void,
+  scheduler: ReviewScheduler,
 ): Promise<boolean> {
   const latest = await remoteMainCommit(cwd);
   if (latest === startupMainCommit) return false;
   console.log(
-    `origin/main advanced from ${startupMainCommit} to ${latest}; exiting so the container can restart with fresh code`,
+    `origin/main advanced from ${startupMainCommit} to ${latest}; draining in-flight reviews before exiting so the container can restart with fresh code`,
   );
+  await scheduler.waitForIdle();
   exitProcess(0);
   return true;
 }
@@ -613,6 +715,10 @@ export async function runLoop(
   // safety net for the process's whole lifetime, reintroducing the exact bug this loop exists to
   // fix.
   let startupMainCommit = await tryCaptureMainCommit(cwd);
+  // Decouples dev from review (issue #96): review/fixup loops run in the background through this
+  // scheduler instead of blocking handleIssue, so the poll loop below can move on to the next
+  // issue's dev work immediately after opening/updating a PR.
+  const scheduler = createReviewScheduler(config, cwd);
 
   for (let i = 0; i < iterations; i += 1) {
     // A single iteration failing (an unexpected git/gh error, a crashed subprocess, ...) must
@@ -623,10 +729,13 @@ export async function runLoop(
       if (startupMainCommit === null) {
         startupMainCommit = await tryCaptureMainCommit(cwd);
       }
-      if (startupMainCommit && (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess))) {
+      if (
+        startupMainCommit &&
+        (await restartIfMainAdvanced(cwd, startupMainCommit, exitProcess, scheduler))
+      ) {
         return;
       }
-      await runIteration(config, cwd);
+      await runIteration(config, cwd, scheduler);
     } catch (error) {
       console.error('Unhandled error during loop iteration, continuing after a short delay:');
       console.error(error);
@@ -638,4 +747,9 @@ export async function runLoop(
       await sleep(config.pollIntervalMs);
     }
   }
+
+  // Bounded test runs (and, in principle, a graceful process shutdown) wait for any background
+  // review work scheduled during the loop to settle, so the final on-disk/GitHub state reflects
+  // everything the run actually did instead of leaving it dangling in an unawaited promise.
+  await scheduler.waitForIdle();
 }

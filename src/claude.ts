@@ -1,7 +1,37 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { currentCommit, setGitIdentity } from './github.js';
 import { memorySection } from './prompt.js';
 import { recordCost } from './cost.js';
+
+interface SpawnResult {
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Promisified `child_process.spawn`, capturing stdout/stderr like `spawnSync` did but without
+ * blocking the event loop for the invocation's whole duration. That's required for real
+ * concurrency (issue #96): `runReviewLoop` and dev sprints can now run in parallel, each spawning
+ * its own `claude -p` subprocess - `spawnSync` would have serialized them regardless of how the
+ * rest of the harness scheduled the work, since it blocks the entire Node process, not just the
+ * calling async task. Never rejects on a non-zero exit code (callers here inspect the parsed JSON
+ * output instead, same as the old `spawnSync`-based code did).
+ */
+function spawnAsync(command: string, args: string[], cwd: string): Promise<SpawnResult> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, { cwd });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf-8');
+    });
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf-8');
+    });
+    proc.on('error', reject);
+    proc.on('close', () => resolve({ stdout, stderr }));
+  });
+}
 
 export interface ClaudeResult {
   success: boolean;
@@ -109,7 +139,7 @@ async function runAgent(
   // test` and `git commit`) still gets silently denied in headless mode with
   // no one to approve it. This is only safe because the harness runs inside
   // the Docker sandbox (see Dockerfile).
-  const proc = spawnSync(
+  const proc = await spawnAsync(
     'claude',
     [
       '-p',
@@ -123,7 +153,7 @@ async function runAgent(
       '--max-budget-usd',
       String(maxBudgetUsd),
     ],
-    { cwd, encoding: 'utf-8' },
+    cwd,
   );
 
   let parsed: ClaudeJsonOutput | undefined;

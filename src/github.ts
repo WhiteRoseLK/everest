@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { mkdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
@@ -239,6 +241,44 @@ export async function createBranch(branch: string, cwd: string): Promise<void> {
 /** Checks out an existing branch, used when resuming an issue after a rate-limit retry. */
 export async function checkoutBranch(branch: string, cwd: string): Promise<void> {
   await execFileAsync('git', ['checkout', branch], { cwd });
+}
+
+/**
+ * Creates a throwaway clone of `mainCwd`'s repo, checked out to `branch`, under
+ * `<mainCwd>/.harness/review-clones/<sanitized-branch>`. Used to run a review/fixup loop
+ * (see `runReviewLoop` in loop.ts) in a working directory fully isolated from whatever the main
+ * loop is doing next in `mainCwd` (starting dev work on another issue) - see issue #96. A real
+ * `git worktree` was considered instead but rejected: linked worktrees share the repository's
+ * local git config (author identity) and refuse to check out a branch that's already checked out
+ * elsewhere, both of which would need extra bookkeeping to avoid races with `mainCwd` picking up
+ * the next issue concurrently. A plain clone sidesteps both for the cost of a bit more disk/time,
+ * negligible for this repo's size. The clone lives under `mainCwd`'s own `.harness/` (gitignored,
+ * never touched by `commitWorkInProgress` - see its own path exclusion) so ancestor `node_modules`
+ * lookup (Node's module resolution, and npm's PATH setup for `node_modules/.bin`) still finds
+ * `mainCwd`'s already-installed dependencies without needing to reinstall or symlink them - the
+ * repo's own `npm test`/`npm run lint` pre-push hook (see .husky/pre-push) depends on this to run
+ * inside the clone at all.
+ */
+export async function createReviewClone(mainCwd: string, branch: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: mainCwd });
+  const originUrl = stdout.trim();
+
+  const dest = join(mainCwd, '.harness', 'review-clones', branch.replace(/\//g, '-'));
+  await mkdir(join(mainCwd, '.harness', 'review-clones'), { recursive: true });
+  // A stale clone can be left behind by a process that exited mid-review (e.g. restartIfMainAdvanced
+  // in loop.ts) - remove it first so `git clone` doesn't refuse to write into a non-empty directory.
+  await rm(dest, { recursive: true, force: true });
+  await execFileAsync(
+    'git',
+    ['clone', '--branch', branch, '--single-branch', originUrl, dest],
+    { cwd: mainCwd },
+  );
+  return dest;
+}
+
+/** Deletes a clone created by {@link createReviewClone}, best-effort (never throws). */
+export async function removeReviewClone(clonePath: string): Promise<void> {
+  await rm(clonePath, { recursive: true, force: true }).catch(() => undefined);
 }
 
 /** Returns the current HEAD commit SHA, used to detect whether the agent committed anything. */
